@@ -2,3 +2,4 @@ Celem naszego projektu jest stworzenie aplikacji typu radio internetowe. Na serw
 Połączeni z radiem klienci mieliby wgląd do aktualnej kolejki odtwarzania, mogliby dodawać oraz usuwać z niej utwory, przestawiać je w dowolny sposób oraz zlecać przeskoczenie do następnego utworu.
 Obsługa aplikacji będzie się odbywać przy pomocy GUI w HTML (REST API). W GUI będzie możliwe śledzenie przebiegu piosenki w czasie rzeczywistym. Operacje te będą synchronizowane wątkami i mutexami.
 
+cd "/Users/naivediamond7/Library/Mobile Documents/com~apple~CloudDocs/college/sieci komputerowe 2/InternetRadio/server" && clang++ -std=c++11 -o server_app main.cpp server.cpp

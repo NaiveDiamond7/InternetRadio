@@ -1,8 +1,14 @@
 #include "server.h"
+#include "wav.h"
 #include <iostream>
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <cstring>
+#include <fstream>
+#include <chrono>
+#include <vector>
+
+constexpr size_t AUDIO_BLOCK = 4096;
 
 Server::Server(int port) : port(port) {}
 
@@ -43,7 +49,7 @@ void Server::setupSocket() {
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1");
     addr.sin_port = htons(port);
 
     if (bind(server_socket, (sockaddr*)&addr, sizeof(addr)) < 0) {
@@ -74,14 +80,82 @@ void Server::acceptLoop() {
 
 void Server::streamingLoop() {
     while (running) {
-        // TODO:
-        // - sprawdź czy kolejka niepusta
-        // - otwórz WAV
-        // - czytaj blokami
-        // - wysyłaj do klientów
-        // - obsłuż skip_requested
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        Track current;
+        {
+            std::lock_guard<std::mutex> lock(playlist_mutex);
+            if (playlist.empty()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                continue;
+            }
+            current = playlist.front();
+        }
+
+        std::ifstream file(current.filename, std::ios::binary);
+        if (!file.is_open()) {
+            std::cerr << "[STREAM] Cannot open " << current.filename << "\n";
+            std::lock_guard<std::mutex> lock(playlist_mutex);
+            playlist.pop_front();
+            continue;
+        }
+
+        WavHeader header{};
+        file.read(reinterpret_cast<char*>(&header), sizeof(header));
+
+        if (header.audioFormat != 1) {
+            std::cerr << "[STREAM] Not PCM WAV\n";
+            file.close();
+            continue;
+        }
+
+        current_track_size = header.dataSize;
+        current_byte_offset = 0;
+        current_elapsed = 0.0;
+        current_track_duration = static_cast<double>(header.dataSize) / header.byteRate;
+
+        std::vector<char> buffer(AUDIO_BLOCK);
+
+        std::cout << "[STREAM] Playing: " << current.filename << "\n";
+
+        while (running && !skip_requested) {
+
+            file.read(buffer.data(), buffer.size());
+            std::streamsize bytesRead = file.gcount();
+            if (bytesRead <= 0)
+                break;
+
+            {
+                std::lock_guard<std::mutex> lock(clients_mutex);
+                for (auto it = clients.begin(); it != clients.end();) {
+                    ssize_t sent = send(*it, buffer.data(), bytesRead, MSG_NOSIGNAL);
+                    if (sent <= 0) {
+                        close(*it);
+                        it = clients.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+            }
+
+            current_byte_offset += bytesRead;
+            double elapsed = current_elapsed.load();
+            elapsed += static_cast<double>(bytesRead) / header.byteRate;
+            current_elapsed.store(elapsed);
+
+            auto delay = std::chrono::duration<double>(
+                static_cast<double>(bytesRead) / header.byteRate);
+            std::this_thread::sleep_for(delay);
+        }
+
+        skip_requested = false;
+        file.close();
+
+        {
+            std::lock_guard<std::mutex> lock(playlist_mutex);
+            playlist.pop_front();
+        }
+
+        std::cout << "[STREAM] Track finished\n";
     }
 }
 

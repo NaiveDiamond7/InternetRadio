@@ -30,6 +30,13 @@ private:
     // Flagi sterujące
     std::atomic<bool> skip_requested{false};
 
+    // Śledzenie przebiegu utworu
+    std::atomic<size_t> current_byte_offset{0};
+    std::atomic<size_t> current_track_size{0};
+    std::atomic<double> current_track_duration{0.0};
+    std::atomic<double> current_elapsed{0.0};
+
+
     // Wątki
     std::thread accept_thread;
     std::thread stream_thread;
