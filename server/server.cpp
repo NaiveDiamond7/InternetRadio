@@ -112,6 +112,15 @@ void Server::streamingLoop() {
             file.close();
             continue;
         }
+        
+        // Store current WAV header for new HTTP clients
+        {
+            std::lock_guard<std::mutex> lock(wav_header_mutex);
+            current_wav_header = header;
+            // Set dataSize to max for streaming (unknown length)
+            current_wav_header.dataSize = 0xFFFFFFFF;
+            current_wav_header.chunkSize = 0xFFFFFFFF;
+        }
 
         current_track_size = header.dataSize;
         current_byte_offset = 0;
@@ -254,11 +263,16 @@ void Server::httpLoop() {
             const char* headers =
                 "HTTP/1.1 200 OK\r\n"
                 "Content-Type: audio/wav\r\n"
-                "Transfer-Encoding: chunked\r\n"
                 "Access-Control-Allow-Origin: *\r\n"
                 "\r\n";
             
             write(client, headers, strlen(headers));
+            
+            // Send WAV header to the client
+            {
+                std::lock_guard<std::mutex> lock(wav_header_mutex);
+                write(client, reinterpret_cast<const char*>(&current_wav_header), sizeof(current_wav_header));
+            }
             
             // Add client to HTTP audio streaming list
             {

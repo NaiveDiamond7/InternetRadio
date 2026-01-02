@@ -5,6 +5,7 @@
 #include <mutex>
 #include <atomic>
 #include "track.h"
+#include "wav.h"
 
 class Server {
 public:
@@ -41,6 +42,10 @@ private:
     std::atomic<size_t> current_track_size{0};
     std::atomic<double> current_track_duration{0.0};
     std::atomic<double> current_elapsed{0.0};
+    
+    // Current track WAV header
+    WavHeader current_wav_header{};
+    std::mutex wav_header_mutex;
 
 
     // Wątki
