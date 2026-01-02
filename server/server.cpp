@@ -19,6 +19,7 @@ Server::~Server() {
 void Server::start() {
     running = true;
     setupSocket();
+    setupHttpSocket();
 
     accept_thread = std::thread(&Server::acceptLoop, this);
     stream_thread = std::thread(&Server::streamingLoop, this);
@@ -49,7 +50,7 @@ void Server::setupSocket() {
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    addr.sin_addr.s_addr = inet_addr("0.0.0.0");
     addr.sin_port = htons(port);
 
     if (bind(server_socket, (sockaddr*)&addr, sizeof(addr)) < 0) {
@@ -159,13 +160,70 @@ void Server::streamingLoop() {
     }
 }
 
+void Server::setupHttpSocket() {
+    http_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (http_socket < 0) {
+        perror("http socket");
+        exit(1);
+    }
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    addr.sin_port = htons(8080);
+
+    if (bind(http_socket, (sockaddr*)&addr, sizeof(addr)) < 0) {
+        perror("http bind");
+        exit(1);
+    }
+
+    if (listen(http_socket, 5) < 0) {
+        perror("http listen");
+        exit(1);
+    }
+}
+
 void Server::httpLoop() {
     while (running) {
-        // TODO:
-        // - obsługa REST API
-        // - /queue
-        // - /skip
-        // - /progress
-        std::this_thread::sleep_for(std::chrono::seconds(1));
+        sockaddr_in client_addr{};
+        socklen_t len = sizeof(client_addr);
+
+        int client = accept(http_socket, (sockaddr*)&client_addr, &len);
+        if (client < 0)
+            continue;
+
+        char buffer[1024] = {0};
+        read(client, buffer, sizeof(buffer) - 1);
+
+        std::string request(buffer);
+
+        if (request.find("GET /progress") == 0) {
+
+            double elapsed   = current_elapsed.load();
+            double duration  = current_track_duration.load();
+            double position  = (duration > 0.0) ? elapsed / duration : 0.0;
+
+            std::string body =
+                "{ \"elapsed\": "  + std::to_string(elapsed)  +
+                ", \"duration\": " + std::to_string(duration) +
+                ", \"position\": " + std::to_string(position) + " }";
+
+            std::string response =
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: application/json\r\n"
+                "Content-Length: " + std::to_string(body.size()) + "\r\n"
+                "Access-Control-Allow-Origin: *\r\n"
+                "\r\n" +
+                body;
+
+            write(client, response.c_str(), response.size());
+        } else {
+            const char* not_found =
+                "HTTP/1.1 404 Not Found\r\n"
+                "Content-Length: 0\r\n\r\n";
+            write(client, not_found, strlen(not_found));
+        }
+
+        close(client);
     }
 }

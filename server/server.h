@@ -17,6 +17,8 @@ public:
 private:
     int port;
     int server_socket;
+    int http_socket;
+
     std::atomic<bool> running{false};
 
     // Klienci strumienia
@@ -49,4 +51,5 @@ private:
 
     // Pomocnicze
     void setupSocket();
+    void setupHttpSocket();
 };
