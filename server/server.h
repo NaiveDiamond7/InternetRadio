@@ -25,6 +25,10 @@ private:
     std::vector<int> clients;
     std::mutex clients_mutex;
 
+    // HTTP clients (audio stream)
+    std::vector<int> http_audio_clients;
+    std::mutex http_audio_clients_mutex;
+
     // Kolejka utworów
     std::deque<Track> playlist;
     std::mutex playlist_mutex;
@@ -45,11 +49,9 @@ private:
     std::thread http_thread;
 
     // Metody wątków
+    void setupSocket();
+    void setupHttpSocket();
     void acceptLoop();
     void streamingLoop();
     void httpLoop();
-
-    // Pomocnicze
-    void setupSocket();
-    void setupHttpSocket();
 };

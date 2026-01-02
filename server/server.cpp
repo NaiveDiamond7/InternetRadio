@@ -17,6 +17,10 @@ Server::~Server() {
 }
 
 void Server::start() {
+
+    playlist.push_back({1, "berdly.wav"});
+    playlist.push_back({2, "paranoia_intro.wav"});
+
     running = true;
     setupSocket();
     setupHttpSocket();
@@ -118,6 +122,13 @@ void Server::streamingLoop() {
 
         std::cout << "[STREAM] Playing: " << current.filename << "\n";
 
+        std::cout
+        << "SR=" << header.sampleRate
+        << " CH=" << header.numChannels
+        << " BPS=" << header.bitsPerSample
+        << "\n";
+
+
         while (running && !skip_requested) {
 
             file.read(buffer.data(), buffer.size());
@@ -132,6 +143,19 @@ void Server::streamingLoop() {
                     if (sent <= 0) {
                         close(*it);
                         it = clients.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(http_audio_clients_mutex);
+                for (auto it = http_audio_clients.begin(); it != http_audio_clients.end();) {
+                    ssize_t sent = send(*it, buffer.data(), bytesRead, MSG_NOSIGNAL);
+                    if (sent <= 0) {
+                        close(*it);
+                        it = http_audio_clients.erase(it);
                     } else {
                         ++it;
                     }
@@ -169,7 +193,7 @@ void Server::setupHttpSocket() {
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    addr.sin_addr.s_addr = inet_addr("0.0.0.0");
     addr.sin_port = htons(8080);
 
     if (bind(http_socket, (sockaddr*)&addr, sizeof(addr)) < 0) {
@@ -192,12 +216,60 @@ void Server::httpLoop() {
         if (client < 0)
             continue;
 
-        char buffer[1024] = {0};
+        char buffer[2048] = {0};
         read(client, buffer, sizeof(buffer) - 1);
 
         std::string request(buffer);
 
-        if (request.find("GET /progress") == 0) {
+        if (request.find("GET /") == 0 && request.find("GET /progress") != 0 && 
+            request.find("GET /audio") != 0 && request.find("GET /skip") != 0) {
+            
+            // Serve index.html
+            std::ifstream html_file("index.html", std::ios::binary);
+            if (html_file.is_open()) {
+                std::string body((std::istreambuf_iterator<char>(html_file)),
+                                 std::istreambuf_iterator<char>());
+                html_file.close();
+
+                std::string response =
+                    "HTTP/1.1 200 OK\r\n"
+                    "Content-Type: text/html\r\n"
+                    "Content-Length: " + std::to_string(body.size()) + "\r\n"
+                    "Access-Control-Allow-Origin: *\r\n"
+                    "\r\n" +
+                    body;
+
+                write(client, response.c_str(), response.size());
+            } else {
+                const char* not_found =
+                    "HTTP/1.1 404 Not Found\r\n"
+                    "Content-Length: 0\r\n\r\n";
+                write(client, not_found, strlen(not_found));
+            }
+            close(client);
+        }
+        else if (request.find("GET /audio") == 0) {
+            
+            // Send HTTP headers for audio stream
+            const char* headers =
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: audio/wav\r\n"
+                "Transfer-Encoding: chunked\r\n"
+                "Access-Control-Allow-Origin: *\r\n"
+                "\r\n";
+            
+            write(client, headers, strlen(headers));
+            
+            // Add client to HTTP audio streaming list
+            {
+                std::lock_guard<std::mutex> lock(http_audio_clients_mutex);
+                http_audio_clients.push_back(client);
+            }
+            
+            // Don't close - let streaming loop handle it
+            continue;
+        }
+        else if (request.find("GET /progress") == 0) {
 
             double elapsed   = current_elapsed.load();
             double duration  = current_track_duration.load();
@@ -217,13 +289,31 @@ void Server::httpLoop() {
                 body;
 
             write(client, response.c_str(), response.size());
-        } else {
+            close(client);
+        }
+        else if (request.find("POST /skip") == 0) {
+
+            skip_requested.store(true);
+
+            std::string body = "{ \"status\": \"skipped\" }";
+
+            std::string response =
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: application/json\r\n"
+                "Content-Length: " + std::to_string(body.size()) + "\r\n"
+                "Access-Control-Allow-Origin: *\r\n"
+                "\r\n" +
+                body;
+
+            write(client, response.c_str(), response.size());
+            close(client);
+        }
+        else {
             const char* not_found =
                 "HTTP/1.1 404 Not Found\r\n"
                 "Content-Length: 0\r\n\r\n";
             write(client, not_found, strlen(not_found));
+            close(client);
         }
-
-        close(client);
     }
 }
