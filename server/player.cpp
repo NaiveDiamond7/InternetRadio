@@ -35,11 +35,12 @@ struct WavHeader {
 // Global state
 std::vector<char> audio_buffer;
 std::mutex audio_buffer_mutex;
-size_t audio_buffer_pos = 0;
+size_t total_bytes_received = 0;  // Total bytes received from server (absolute position)
 WavHeader current_header;
 std::atomic<double> current_elapsed{0.0};
 std::atomic<double> current_duration{0.0};
 std::atomic<bool> is_connected{false};
+std::atomic<bool> skip_requested{false};
 
 void sendHttpRequest(int sock, const std::string& method, const std::string& path) {
     std::string request = method + " " + path + " HTTP/1.1\r\n";
@@ -111,7 +112,7 @@ void receiveAudioThread(const std::string& server_addr, int server_port) {
             current_duration = static_cast<double>(header.dataSize) / header.byteRate;
             audio_buffer.clear();
             audio_buffer.reserve(AUDIO_BUFFER_SIZE);
-            audio_buffer_pos = 0;
+            total_bytes_received = 0;
         }
 
         std::cout << "[AUDIO] Format: " << header.numChannels << " ch, "
@@ -127,21 +128,31 @@ void receiveAudioThread(const std::string& server_addr, int server_port) {
             {
                 std::lock_guard<std::mutex> lock(audio_buffer_mutex);
                 audio_buffer.insert(audio_buffer.end(), recv_buffer.begin(), recv_buffer.begin() + received);
+                total_bytes_received += received;
                 
-                // Limit buffer size
+                // Limit buffer size - keep only the last 512KB
                 if (audio_buffer.size() > AUDIO_BUFFER_SIZE) {
-                    audio_buffer.erase(audio_buffer.begin(), audio_buffer.begin() + received);
+                    size_t to_erase = audio_buffer.size() - AUDIO_BUFFER_SIZE;
+                    audio_buffer.erase(audio_buffer.begin(), audio_buffer.begin() + to_erase);
+                }
+                
+                // Debug: Log every 100KB received
+                static size_t last_log = 0;
+                if (total_bytes_received - last_log >= 100000) {
+                    std::cout << "[AUDIO] Buffered " << total_bytes_received << " bytes (buffer size: " << audio_buffer.size() << ")\n";
+                    last_log = total_bytes_received;
                 }
             }
 
             // Update elapsed time
-            size_t buf_size;
-            {
-                std::lock_guard<std::mutex> lock(audio_buffer_mutex);
-                buf_size = audio_buffer.size();
-            }
-            double elapsed = static_cast<double>(buf_size) / header.byteRate;
+            double elapsed = static_cast<double>(total_bytes_received) / header.byteRate;
             current_elapsed.store(elapsed);
+
+            // Check for skip request
+            if (skip_requested.load()) {
+                skip_requested.store(false);
+                break;  // Exit and reconnect for next track
+            }
         }
 
         close(audio_sock);
@@ -274,6 +285,10 @@ void guiThread() {
                 "    <div class=\"container\">\n"
                 "        <h1>Music Radio</h1>\n"
                 "        <div id=\"status\" class=\"status disconnected\">● Disconnected</div>\n"
+                "        <audio id=\"audio-player\" controls autoplay style=\"width: 100%; margin: 20px 0;\">\n"
+                "            <source src=\"/audio\" type=\"audio/wav\">\n"
+                "            Your browser does not support the audio element.\n"
+                "        </audio>\n"
                 "        <progress id=\"progress\" value=\"0\" max=\"1\"></progress>\n"
                 "        <div class=\"time-display\" id=\"time\">0:00 / 0:00</div>\n"
                 "        <div class=\"controls\">\n"
@@ -352,6 +367,7 @@ void guiThread() {
             close(client);
         }
         else if (request.find("GET /audio") == 0) {
+            std::cout << "[GUI] Audio client connected\n";
             
             std::string response =
                 "HTTP/1.1 200 OK\r\n"
@@ -360,30 +376,66 @@ void guiThread() {
 
             write(client, response.c_str(), response.size());
 
-            // Send WAV header
+            // Send WAV header and start client from current buffer position
+            size_t client_bytes_sent = 0;
             {
                 std::lock_guard<std::mutex> lock(audio_buffer_mutex);
                 write(client, reinterpret_cast<const char*>(&current_header), sizeof(current_header));
+                
+                // Start client from current buffer position (not from beginning)
+                // This makes it a "live stream" - new clients get current audio
+                if (total_bytes_received > audio_buffer.size()) {
+                    client_bytes_sent = total_bytes_received - audio_buffer.size();
+                }
+                
+                std::cout << "[GUI] Sent WAV header, buffer has " << audio_buffer.size() << " bytes, total received: " << total_bytes_received << "\n";
+                std::cout << "[GUI] Starting client at byte position: " << client_bytes_sent << "\n";
             }
 
-            // Stream audio in chunks
+            // Stream audio continuously from the buffer
+            // Use absolute byte position (how many bytes from start of stream we've sent)
+            
             while (true) {
                 std::vector<char> chunk;
+                size_t buffer_start_byte = 0;
+                
                 {
                     std::lock_guard<std::mutex> lock(audio_buffer_mutex);
-                    if (audio_buffer_pos < audio_buffer.size()) {
-                        size_t to_send = std::min(size_t(4096), audio_buffer.size() - audio_buffer_pos);
-                        chunk.insert(chunk.end(), 
-                                   audio_buffer.begin() + audio_buffer_pos,
-                                   audio_buffer.begin() + audio_buffer_pos + to_send);
-                        audio_buffer_pos += to_send;
+                    // Which server byte does buffer[0] represent?
+                    if (total_bytes_received > audio_buffer.size()) {
+                        buffer_start_byte = total_bytes_received - audio_buffer.size();
+                    } else {
+                        buffer_start_byte = 0;
+                    }
+                    
+                    // Offset into buffer for this client's position
+                    ssize_t offset = (ssize_t)client_bytes_sent - (ssize_t)buffer_start_byte;
+                    
+                    // Only send if client offset is valid within current buffer
+                    if (offset >= 0 && offset < (ssize_t)audio_buffer.size()) {
+                        size_t to_send = std::min(size_t(4096), audio_buffer.size() - offset);
+                        chunk.insert(chunk.end(),
+                                   audio_buffer.begin() + offset,
+                                   audio_buffer.begin() + offset + to_send);
+                        client_bytes_sent += to_send;
+                        
+                        // Debug: Log first few sends
+                        static int send_count = 0;
+                        if (send_count < 5) {
+                            std::cout << "[GUI] Sending chunk " << to_send << " bytes (total sent: " << client_bytes_sent << ")\n";
+                            send_count++;
+                        }
                     }
                 }
-
+                
                 if (chunk.empty()) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                    if (audio_buffer_pos >= audio_buffer.size())
-                        break;
+                    // Debug: Log when waiting for data
+                    static int wait_count = 0;
+                    if (wait_count < 3) {
+                        std::cout << "[GUI] Waiting for data... (client pos: " << client_bytes_sent << ", buffer start: " << buffer_start_byte << ")\n";
+                        wait_count++;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
                     continue;
                 }
 
@@ -391,6 +443,21 @@ void guiThread() {
                     break;
             }
 
+            close(client);
+        }
+        else if (request.find("POST /skip") == 0) {
+            skip_requested.store(true);
+            
+            std::string body = "{ \"status\": \"skipped\" }";
+            std::string response =
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: application/json\r\n"
+                "Content-Length: " + std::to_string(body.size()) + "\r\n"
+                "Access-Control-Allow-Origin: *\r\n"
+                "\r\n" +
+                body;
+
+            write(client, response.c_str(), response.size());
             close(client);
         }
         else {
