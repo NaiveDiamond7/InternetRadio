@@ -192,10 +192,42 @@ void Server::streamingLoop() {
         // Store current WAV header for new HTTP clients
         {
             std::lock_guard<std::mutex> lock(wav_header_mutex);
-            current_wav_header = header;
-            // Set dataSize to max for streaming (unknown length)
-            current_wav_header.dataSize = 0xFFFFFFFF;
-            current_wav_header.chunkSize = 0xFFFFFFFF;
+            // Reconstruct a minimal, valid RIFF/WAVE header for HTTP streaming
+            // This ensures all clients get a standard-compliant header regardless of source
+            current_wav_header = WavHeader{};
+            
+            // Copy basic format info
+            current_wav_header.riff[0] = 'R'; current_wav_header.riff[1] = 'I'; 
+            current_wav_header.riff[2] = 'F'; current_wav_header.riff[3] = 'F';
+            
+            current_wav_header.wave[0] = 'W'; current_wav_header.wave[1] = 'A';
+            current_wav_header.wave[2] = 'V'; current_wav_header.wave[3] = 'E';
+            
+            current_wav_header.fmt[0] = 'f'; current_wav_header.fmt[1] = 'm';
+            current_wav_header.fmt[2] = 't'; current_wav_header.fmt[3] = ' ';
+            
+            current_wav_header.data[0] = 'd'; current_wav_header.data[1] = 'a';
+            current_wav_header.data[2] = 't'; current_wav_header.data[3] = 'a';
+            
+            // Copy format parameters from the file header
+            current_wav_header.subchunk1Size = 16;  // PCM fmt chunk is always 16 bytes
+            current_wav_header.audioFormat = header.audioFormat;
+            current_wav_header.numChannels = header.numChannels;
+            current_wav_header.sampleRate = header.sampleRate;
+            current_wav_header.byteRate = header.byteRate;
+            current_wav_header.blockAlign = header.blockAlign;
+            current_wav_header.bitsPerSample = header.bitsPerSample;
+            
+            // Set sizes for streaming (browsers need this for duration calculation)
+            // Using 0xFFFFFFFF would confuse the audio decoder
+            // Instead, use a large but realistic value
+            current_wav_header.dataSize = 0x7FFFFFFF;  // Max 32-bit signed int (~2GB)
+            current_wav_header.chunkSize = 36 + 0x7FFFFFFF;  // RIFF chunk includes 36 bytes of header
+            
+            std::cout << "[STREAM] Reconstructed WAV header for HTTP streaming:\n"
+                      << "  Format: " << current_wav_header.numChannels << " ch, "
+                      << current_wav_header.sampleRate << " Hz, "
+                      << current_wav_header.bitsPerSample << " bit\n";
         }
 
         current_track_size = header.dataSize;
@@ -327,9 +359,12 @@ void Server::httpLoop() {
         else if (request.find("GET /audio") == 0) {
             
             // Send HTTP headers for audio stream
+            // Note: Not setting Content-Length for streaming (infinite stream)
             const char* headers =
                 "HTTP/1.1 200 OK\r\n"
                 "Content-Type: audio/wav\r\n"
+                "Cache-Control: no-cache\r\n"
+                "Connection: close\r\n"
                 "Access-Control-Allow-Origin: *\r\n"
                 "\r\n";
             
