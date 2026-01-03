@@ -20,6 +20,8 @@ void Server::start() {
 
     playlist.push_back({1, "berdly.wav"});
     playlist.push_back({2, "paranoia_intro.wav"});
+    playlist.push_back({3, "give_the_anarchist_a_cigarette.wav"});
+    playlist.push_back({4, "keine_lust.wav"});
 
     running = true;
     setupSocket();
@@ -107,8 +109,82 @@ void Server::streamingLoop() {
         WavHeader header{};
         file.read(reinterpret_cast<char*>(&header), sizeof(header));
 
+        // WAV DEBUGGING ----------------------------------------------
+        // Debug: Print what we read
+        std::cout << "[STREAM] Playing: " << current.filename << "\n";
+        std::cout << "[STREAM] WAV Header Debug:\n";
+        std::cout << "  RIFF: " << std::string(header.riff, 4) << "\n";
+        std::cout << "  ChunkSize: " << header.chunkSize << "\n";
+        std::cout << "  WAVE: " << std::string(header.wave, 4) << "\n";
+        std::cout << "  fmt: " << std::string(header.fmt, 4) << "\n";
+        std::cout << "  Subchunk1Size: " << header.subchunk1Size << "\n";
+        std::cout << "  AudioFormat: " << header.audioFormat << "\n";
+        std::cout << "  NumChannels: " << header.numChannels << "\n";
+        std::cout << "  SampleRate: " << header.sampleRate << "\n";
+        std::cout << "  ByteRate: " << header.byteRate << "\n";
+        std::cout << "  BlockAlign: " << header.blockAlign << "\n";
+        std::cout << "  BitsPerSample: " << header.bitsPerSample << "\n";
+        std::cout << "  data: " << std::string(header.data, 4) << "\n";
+        std::cout << "  DataSize: " << header.dataSize << "\n";
+        std::cout << "  Current file position: " << file.tellg() << "\n";
+        // ------------------------------------------------------------
+
         if (header.audioFormat != 1) {
             std::cerr << "[STREAM] Not PCM WAV\n";
+            file.close();
+            continue;
+        }
+        
+        // Check if fmt chunk is larger than 16 bytes
+        if (header.subchunk1Size != 16) {
+            std::cout << "[STREAM] WARNING: fmt chunk is " << header.subchunk1Size 
+                      << " bytes (expected 16)\n";
+            
+            // Reposition: go back to right after the fmt chunk header (position 20)
+            // Then skip the ENTIRE fmt chunk data
+            file.seekg(20, std::ios::beg);  // Position after "fmt " and size
+            file.seekg(header.subchunk1Size, std::ios::cur);  // Skip entire fmt data
+            
+            // Now read the next chunk header (should be "data")
+            char data_marker[4];
+            uint32_t data_size;
+            file.read(data_marker, 4);
+            file.read(reinterpret_cast<char*>(&data_size), 4);
+            
+            std::cout << "[STREAM] After repositioning: chunk = '" << std::string(data_marker, 4) 
+                      << "', size = " << data_size << "\n";
+            std::cout << "[STREAM] File position now: " << file.tellg() << "\n";
+            
+            // If it's not "data", it might be another chunk (like "LIST" or "fact")
+            // Keep reading chunks until we find "data"
+            while (std::string(data_marker, 4) != "data" && file.good()) {
+                std::cout << "[STREAM] Skipping chunk '" << std::string(data_marker, 4) 
+                          << "' of size " << data_size << "\n";
+                file.seekg(data_size, std::ios::cur);  // Skip this chunk's data
+                file.read(data_marker, 4);
+                file.read(reinterpret_cast<char*>(&data_size), 4);
+            }
+            
+            if (std::string(data_marker, 4) == "data") {
+                std::cout << "[STREAM] Found data chunk: size = " << data_size << "\n";
+                // Update header with correct data info
+                std::memcpy(header.data, data_marker, 4);
+                header.dataSize = data_size;
+            } else {
+                std::cerr << "[STREAM] ERROR: Could not find 'data' chunk\n";
+                file.close();
+                continue;
+            }
+        }
+        
+        // Final verification - we should be at the data section now
+        std::cout << "[STREAM] Final header state:\n";
+        std::cout << "  data marker: '" << std::string(header.data, 4) << "'\n";
+        std::cout << "  data size: " << header.dataSize << "\n";
+        std::cout << "  file position: " << file.tellg() << " (start of audio data)\n";
+        
+        if (std::string(header.data, 4) != "data") {
+            std::cerr << "[STREAM] ERROR: Still not at 'data' chunk!\n";
             file.close();
             continue;
         }
@@ -128,15 +204,6 @@ void Server::streamingLoop() {
         current_track_duration = static_cast<double>(header.dataSize) / header.byteRate;
 
         std::vector<char> buffer(AUDIO_BLOCK);
-
-        std::cout << "[STREAM] Playing: " << current.filename << "\n";
-
-        std::cout
-        << "SR=" << header.sampleRate
-        << " CH=" << header.numChannels
-        << " BPS=" << header.bitsPerSample
-        << "\n";
-
 
         while (running && !skip_requested) {
 
