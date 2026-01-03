@@ -9,26 +9,28 @@
 #include <mutex>
 #include <atomic>
 #include <queue>
+#include <cstdint>
 
 constexpr size_t BUFFER_SIZE = 4096;
 constexpr int GUI_PORT = 3000;
 constexpr int AUDIO_BUFFER_SIZE = 512 * 1024;  // 512KB ring buffer
 
+// Nagłówek WAV – wartości są zawsze nadpisywane nagłówkiem z serwera
 #pragma pack(push, 1)
 struct WavHeader {
-    char riff[4] = {'R','I','F','F'};
-    uint32_t chunkSize = 0;
-    char wave[4] = {'W','A','V','E'};
-    char fmt[4]  = {'f','m','t',' '};
-    uint32_t subchunk1Size = 16;
-    uint16_t audioFormat = 1;
-    uint16_t numChannels = 2;
-    uint32_t sampleRate = 48000;
-    uint32_t byteRate = sampleRate * numChannels * 2;
-    uint16_t blockAlign = numChannels * 2;
-    uint16_t bitsPerSample = 24;
-    char data[4] = {'d','a','t','a'};
-    uint32_t dataSize = 0;
+    char riff[4];
+    uint32_t chunkSize;
+    char wave[4];
+    char fmt[4];
+    uint32_t subchunk1Size;
+    uint16_t audioFormat;
+    uint16_t numChannels;
+    uint32_t sampleRate;
+    uint32_t byteRate;
+    uint16_t blockAlign;
+    uint16_t bitsPerSample;
+    char data[4];
+    uint32_t dataSize;
 };
 #pragma pack(pop)
 
