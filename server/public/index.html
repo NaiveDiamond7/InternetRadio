@@ -847,6 +847,14 @@
         }, timeout);
     }
 
+    function prettyTrackName(path) {
+        if (!path) return '';
+        const base = (path.split('/').pop() || path);
+        const dot = base.lastIndexOf('.');
+        if (dot > 0) return base.slice(0, dot);
+        return base;
+    }
+
     async function updateProgress() {
         try {
             const res = await fetch('/progress', { cache: 'no-store' });
@@ -862,7 +870,7 @@
             timeTotalEl.textContent = duration > 0 ? formatTime(duration) : '∞';
 
             if (data.filename) {
-                trackFilenameEl.textContent = data.filename;
+                trackFilenameEl.textContent = prettyTrackName(data.filename);
             }
 
             statusText.textContent = 'Odtwarzanie aktywne';
@@ -892,7 +900,7 @@
                         index: typeof item.index === 'number' ? item.index : idx
                     };
                 }
-                // fallback na sam string
+                
                 return {
                     id: idx,
                     file: String(item),
@@ -912,11 +920,13 @@
         row.draggable = true;
         row.dataset.index = String(globalIndex);
 
+        const displayName = prettyTrackName(item.file);
+
         row.innerHTML = `
             <div class="queue-left">
                 <div class="queue-index">${globalIndex + 1}.</div>
                 <div class="queue-dot"></div>
-                <div class="queue-name" title="${item.file}">${item.file}</div>
+                <div class="queue-name" title="${item.file}">${displayName}</div>
             </div>
             <div class="queue-pill queue-pill--remove" title="Usuń z kolejki">✕</div>
         `;
@@ -1197,11 +1207,12 @@
             const row = document.createElement('div');
             row.className = 'library-item';
 
-            const name = fullPath.split('/').pop() || fullPath;
+            const name = prettyTrackName(fullPath);
 
             const nameEl = document.createElement('span');
             nameEl.className = 'library-name';
             nameEl.textContent = name;
+            nameEl.title = fullPath;
 
             const addBtn = document.createElement('button');
             addBtn.type = 'button';

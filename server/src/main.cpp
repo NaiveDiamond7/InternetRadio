@@ -6,7 +6,6 @@
 #endif
 
 int main(int argc, char** argv) {
-    // Domyślny port HTTP; można go nadpisać argumentem linii komend.
     int httpPort = DEFAULT_HTTP_PORT;
     if (argc >= 2) {
         try {

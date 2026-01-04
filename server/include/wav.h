@@ -3,9 +3,6 @@
 #include <vector>
 #include <string>
 
-//
-// ======================= WAV STRUCT =======================
-//
 struct WavFile {
 	int sampleRate = 0;
 	int channels = 0;
