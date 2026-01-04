@@ -242,7 +242,10 @@ void Server::httpLoop() {
         if (client < 0)
             continue;
 
-        handleHttpClient(client);
+        // Handle each client in a separate thread to avoid blocking
+        std::thread([this, client]() {
+            handleHttpClient(client);
+        }).detach();
     }
 }
 
