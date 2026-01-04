@@ -43,7 +43,15 @@ add_custom_command(TARGET server POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory
             $<TARGET_FILE_DIR:server>/public
             $<TARGET_FILE_DIR:server>/audio
+            $<TARGET_FILE_DIR:server>/uploads
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${PROJECT_SOURCE_DIR}/public/index.html $<TARGET_FILE_DIR:server>/public/index.html
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${PROJECT_SOURCE_DIR}/audio/berdly.wav $<TARGET_FILE_DIR:server>/audio/berdly.wav
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${PROJECT_SOURCE_DIR}/audio/sans.wav   $<TARGET_FILE_DIR:server>/audio/sans.wav
 )
+
+# Copy all WAV files from audio directory
+file(GLOB AUDIO_FILES "${PROJECT_SOURCE_DIR}/audio/*.wav")
+foreach(AUDIO_FILE ${AUDIO_FILES})
+    get_filename_component(AUDIO_FILENAME ${AUDIO_FILE} NAME)
+    add_custom_command(TARGET server POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${AUDIO_FILE} $<TARGET_FILE_DIR:server>/audio/${AUDIO_FILENAME}
+    )
+endforeach()
