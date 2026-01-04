@@ -208,9 +208,8 @@ void Server::start() {
     // Zainicjalizuj generator losowy dla automatycznej kolejki
     std::srand(static_cast<unsigned int>(std::time(nullptr)));
 
-    // Bazowa kolejka: najpierw berdly, potem sans (z katalogu audio/)
     enqueueTrack("audio/berdly.wav");
-    enqueueTrack("audio/sans.wav");
+    enqueueTrack("audio/wodka.wav");
     
     // Initialize PortAudio
     Pa_Initialize();
