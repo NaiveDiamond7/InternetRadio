@@ -1,4 +1,5 @@
-#pragma once
+﻿#pragma once
+
 #include <vector>
 #include <deque>
 #include <thread>
@@ -6,14 +7,20 @@
 #include <atomic>
 #include <condition_variable>
 #include <string>
-#include <cstdint>
-#include <portaudio.h>
+#include <chrono>
+
 #include "track.h"
-#include "wav.h"
+
+// Prosty serwer "radia" HTTP:
+// - /queue  (GET/POST)  – kolejka plików WAV po nazwie
+// - /audio  (GET)       – aktualny utwór jako plik WAV
+// - /progress (GET)     – JSON z postępem (elapsed, duration, position)
+// - /skip   (POST)      – przeskoczenie do następnego utworu
+// - /        (GET)      – index.html z GUI
 
 class Server {
 public:
-    Server(int port);
+    explicit Server(int port);
     ~Server();
 
     void start();
@@ -21,51 +28,41 @@ public:
 
 private:
     int port;
-    int server_socket;
     int http_socket{-1};
     std::atomic<bool> running{false};
 
-    // Klienci strumienia
-    std::vector<int> clients;
-    std::mutex clients_mutex;
-
-    // Kolejka utworów
+    // Kolejka utworów (tylko nazwy plików)
     std::deque<Track> playlist;
     std::mutex playlist_mutex;
 
-    // Flagi sterujące
+    // Sterowanie odtwarzaniem
     std::atomic<bool> skip_requested{false};
     std::atomic<int> next_track_id{1};
 
-    // PortAudio stream i stan odtwarzania
-    PaStream* audio_stream = nullptr;
-    WavFile current_wav;
-    std::atomic<size_t> current_position{0};
+    // Aktualnie odtwarzany utwór (czas liczony z zegara)
     std::mutex playback_mutex;
     std::condition_variable playback_cv;
+    std::string current_track;
+    double current_track_duration{0.0};
+    std::chrono::steady_clock::time_point current_track_start{};
+    bool track_playing{false};
 
     // Wątki
-    std::thread accept_thread;
     std::thread stream_thread;
     std::thread http_thread;
 
     // Metody wątków
-    void acceptLoop();
     void streamingLoop();
     void httpLoop();
 
     // Pomocnicze
-    void setupSocket();
     void setupHttpSocket();
-    WavFile loadWav(const std::string& filename);
-    void sendToClients(const uint8_t* buffer, size_t size);
+    double computeTrackDuration(const std::string& filename);
     void handleHttpClient(int client);
-    void sendHttpResponse(int client, const std::string& body, const std::string& contentType = "text/plain", int status = 200);
+    void sendHttpResponse(int client,
+                          const std::string& body,
+                          const std::string& contentType = "text/plain",
+                          int status = 200);
     int enqueueTrack(const std::string& filename);
     void streamHttpAudio(int client);
-    void startAudioStream();
-    void stopAudioStream();
-
-    // PortAudio callback (static wrapper)
-    friend int portaudioCallback(const void*, void*, unsigned long, const PaStreamCallbackTimeInfo*, PaStreamCallbackFlags, void*);
 };
