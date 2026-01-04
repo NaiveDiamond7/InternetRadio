@@ -14,6 +14,28 @@
 #include <sys/stat.h>
 #include <cstdlib>
 #include <ctime>
+#include <dirent.h>
+
+static std::string jsonEscape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 4);
+    for (char c : s) {
+        switch (c) {
+            case '\\': out += "\\\\"; break;
+            case '"':  out += "\\\""; break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    // skip other control characters
+                    continue;
+                }
+                out.push_back(c);
+        }
+    }
+    return out;
+}
 
 Server::Server(int port) : port(port) {}
 
@@ -303,6 +325,28 @@ void Server::handleHttpClient(int client) {
         return s.substr(i);
     };
 
+    auto listWavFiles = [](const std::string& dir, const std::string& prefix) {
+        std::vector<std::string> files;
+        DIR* dp = opendir(dir.c_str());
+        if (!dp) return files;
+        struct dirent* ent;
+        while ((ent = readdir(dp)) != nullptr) {
+            const char* name = ent->d_name;
+            if (std::strcmp(name, ".") == 0 || std::strcmp(name, "..")==0) continue;
+            std::string fname = name;
+            auto pos = fname.find_last_of('.');
+            if (pos == std::string::npos) continue;
+            std::string ext = fname.substr(pos + 1);
+            std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c){ return std::tolower(c); });
+            if (ext == "wav") {
+                files.push_back(prefix + fname);
+            }
+        }
+        closedir(dp);
+        std::sort(files.begin(), files.end());
+        return files;
+    };
+
     if (path == "/upload" && method == "POST") {
         const long MAX_UPLOAD = 50 * 1024 * 1024; // 50MB limit
         if (content_length < 0 || content_length > MAX_UPLOAD) {
@@ -359,6 +403,26 @@ void Server::handleHttpClient(int client) {
 
         // Immediate response - processing happens in background
         sendHttpResponse(client, "{\"status\":\"processing\"}", "application/json", 202);
+        return;
+    }
+
+    if (path == "/library" && method == "GET") {
+        auto audioFiles = listWavFiles("audio", "audio/");
+        auto uploadFiles = listWavFiles("uploads", "uploads/");
+
+        std::string body = "{\"audio\":[";
+        for (size_t i = 0; i < audioFiles.size(); ++i) {
+            body += "\"" + jsonEscape(audioFiles[i]) + "\"";
+            if (i + 1 < audioFiles.size()) body += ",";
+        }
+        body += "],\"uploads\":[";
+        for (size_t i = 0; i < uploadFiles.size(); ++i) {
+            body += "\"" + jsonEscape(uploadFiles[i]) + "\"";
+            if (i + 1 < uploadFiles.size()) body += ",";
+        }
+        body += "]}";
+
+        sendHttpResponse(client, body, "application/json", 200);
         return;
     }
 

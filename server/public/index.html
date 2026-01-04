@@ -439,6 +439,17 @@
             border: 1px solid rgba(255, 255, 255, 0.08);
         }
 
+        .queue-pill--remove {
+            cursor: pointer;
+            background: rgba(40, 10, 20, 0.96);
+            color: #ff9ba8;
+            border-color: rgba(255, 123, 151, 0.6);
+        }
+
+        .queue-pill--remove:hover {
+            background: rgba(60, 15, 28, 0.98);
+        }
+
         .queue-section {
             position: relative;
         }
@@ -516,6 +527,70 @@
             margin-top: 6px;
             font-size: 11px;
             color: var(--text-muted);
+        }
+
+        /* Library */
+
+        .library-wrap {
+            margin-top: 10px;
+            padding-top: 8px;
+            border-top: 1px dashed rgba(255, 255, 255, 0.08);
+        }
+
+        .library-columns {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+            margin-top: 6px;
+        }
+
+        @media (max-width: 640px) {
+            .library-columns {
+                grid-template-columns: minmax(0, 1fr);
+            }
+        }
+
+        .library-title {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            color: var(--text-muted);
+        }
+
+        .library-list {
+            margin-top: 4px;
+            max-height: 120px;
+            overflow-y: auto;
+            font-size: 12px;
+        }
+
+        .library-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 3px 0;
+            gap: 6px;
+        }
+
+        .library-name {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            color: var(--text-muted);
+        }
+
+        .library-add {
+            font-size: 10px;
+            padding: 1px 6px;
+            border-radius: 999px;
+            border: 1px solid rgba(145, 229, 255, 0.6);
+            background: rgba(5, 14, 40, 0.96);
+            color: #91e5ff;
+            cursor: pointer;
+        }
+
+        .library-add:hover {
+            background: rgba(10, 22, 60, 0.98);
         }
 
         /* Toast */
@@ -671,6 +746,24 @@
                     <span id="upload-status">Gotowy do wysyłania</span>
                     <span>Port HTTP: 8080</span>
                 </div>
+
+                <div class="library-wrap">
+                    <label>Utwory dostępne na serwerze:</label>
+                    <div class="library-columns">
+                        <div>
+                            <div class="library-title">Audio/</div>
+                            <div id="library-audio" class="library-list">
+                                <div class="library-item"><span class="library-name">Ładowanie…</span></div>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="library-title">Uploads/</div>
+                            <div id="library-uploads" class="library-list">
+                                <div class="library-item"><span class="library-name">Ładowanie…</span></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </section>
         </main>
     </div>
@@ -696,6 +789,8 @@
     const toastEl = document.getElementById('toast');
     const toastTitleEl = document.getElementById('toast-title');
     const toastBodyEl = document.getElementById('toast-body');
+    const libraryAudioEl = document.getElementById('library-audio');
+    const libraryUploadsEl = document.getElementById('library-uploads');
 
     let queueItems = [];
     let dragFromIndex = null;
@@ -785,8 +880,17 @@
                 <div class="queue-dot"></div>
                 <div class="queue-name" title="${item.file}">${item.file}</div>
             </div>
-            <div class="queue-pill">W kolejce</div>
+            <div class="queue-pill queue-pill--remove" title="Usuń z kolejki">✕</div>
         `;
+
+        const removeBtn = row.querySelector('.queue-pill--remove');
+        if (removeBtn) {
+            removeBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                await removeQueueItem(globalIndex);
+            });
+        }
 
         row.addEventListener('dragstart', (e) => {
             dragFromIndex = globalIndex;
@@ -891,6 +995,21 @@
         }
     }
 
+    async function removeQueueItem(index) {
+        try {
+            const body = 'index=' + encodeURIComponent(index);
+            const res = await fetch('/queue/remove', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8' },
+                body
+            });
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            await fetchQueue();
+        } catch (e) {
+            showToast('Nie udało się usunąć utworu z kolejki.', { title: 'Błąd', error: true });
+        }
+    }
+
     async function skipTrack() {
         try {
             const res = await fetch('/skip', { method: 'POST' });
@@ -948,11 +1067,75 @@
             showToast('Plik wysłany, trwa przetwarzanie po stronie serwera.', { title: 'Upload' });
             uploadStatus.textContent = 'Wysłano plik – oczekiwanie na przetworzenie';
             fileInput.value = '';
-            setTimeout(fetchQueue, 1000);
+            setTimeout(() => { fetchQueue(); fetchLibrary(); }, 1000);
         } catch (e) {
             uploadStatus.textContent = 'Błąd podczas wysyłania';
             showToast('Nie udało się wysłać pliku.', { title: 'Błąd uploadu', error: true });
         }
+    }
+
+    async function fetchLibrary() {
+        try {
+            const res = await fetch('/library', { cache: 'no-store' });
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const data = await res.json();
+            const audio = Array.isArray(data.audio) ? data.audio : [];
+            const uploads = Array.isArray(data.uploads) ? data.uploads : [];
+
+            renderLibraryList(libraryAudioEl, audio, 'audio');
+            renderLibraryList(libraryUploadsEl, uploads, 'uploads');
+        } catch (e) {
+            if (libraryAudioEl) {
+                libraryAudioEl.innerHTML = '<div class="library-item"><span class="library-name">Błąd ładowania listy.</span></div>';
+            }
+            if (libraryUploadsEl) {
+                libraryUploadsEl.innerHTML = '<div class="library-item"><span class="library-name">Błąd ładowania listy.</span></div>';
+            }
+        }
+    }
+
+    function renderLibraryList(container, items, type) {
+        if (!container) return;
+        container.innerHTML = '';
+        if (!items.length) {
+            container.innerHTML = '<div class="library-item"><span class="library-name">Brak plików.</span></div>';
+            return;
+        }
+
+        items.forEach((fullPath) => {
+            const row = document.createElement('div');
+            row.className = 'library-item';
+
+            const name = fullPath.split('/').pop() || fullPath;
+
+            const nameEl = document.createElement('span');
+            nameEl.className = 'library-name';
+            nameEl.textContent = name;
+
+            const addBtn = document.createElement('button');
+            addBtn.type = 'button';
+            addBtn.className = 'library-add';
+            addBtn.textContent = '➕';
+            addBtn.title = 'Dodaj do kolejki';
+            addBtn.addEventListener('click', async () => {
+                try {
+                    const res = await fetch('/queue', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+                        body: fullPath + '\n'
+                    });
+                    if (!res.ok) throw new Error('HTTP ' + res.status);
+                    showToast('Dodano do kolejki: ' + name, { title: 'Dodano' });
+                    await fetchQueue();
+                } catch (e) {
+                    showToast('Nie udało się dodać pliku do kolejki.', { title: 'Błąd', error: true });
+                }
+            });
+
+            row.appendChild(nameEl);
+            row.appendChild(addBtn);
+            container.appendChild(row);
+        });
     }
 
     document.getElementById('btn-skip').addEventListener('click', skipTrack);
@@ -968,6 +1151,7 @@
 
     updateProgress();
     fetchQueue();
+    fetchLibrary();
     setInterval(updateProgress, 700);
     setInterval(fetchQueue, 4000);
 </script>
