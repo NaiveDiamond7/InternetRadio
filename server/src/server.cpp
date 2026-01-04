@@ -58,28 +58,35 @@ int portaudioCallback(
     float* out = static_cast<float*>(output);
 
     // Lock-free: use atomic operations to avoid blocking the real-time audio thread
-    size_t pos = server->current_position.load(std::memory_order_acquire);
+    size_t pos = server->current_position.load(std::memory_order_acquire); // byte offset
+    const int bits = server->current_wav.bitsPerSample;
+    const int sampleSize = bits / 8; // bytes per channel sample
+    const int channels = server->current_wav.channels;
+    const size_t frameSize = static_cast<size_t>(sampleSize * channels);
 
     for (unsigned long i = 0; i < framesPerBuffer; ++i) {
-        for (int ch = 0; ch < server->current_wav.channels; ++ch) {
-            if (pos + 3 <= server->current_wav.data.size()) {
-                const uint8_t* p = server->current_wav.data.data() + pos;
-                // Convert 24-bit PCM to float
-                int32_t sample =
-                    (p[0]) |
-                    (p[1] << 8) |
-                    (p[2] << 16);
-                if (sample & 0x800000)
-                    sample |= ~0xFFFFFF;
-                out[i * server->current_wav.channels + ch] = sample / 8388608.0f;
-                pos += 3;
+        for (int ch = 0; ch < channels; ++ch) {
+            size_t byteIndex = pos + static_cast<size_t>(ch * sampleSize);
+            if (byteIndex + sampleSize <= server->current_wav.data.size()) {
+                const uint8_t* p = server->current_wav.data.data() + byteIndex;
+                float sampleOut = 0.0f;
+                if (bits == 24) {
+                    int32_t sample = (p[0]) | (p[1] << 8) | (p[2] << 16);
+                    if (sample & 0x800000) sample |= ~0xFFFFFF; // sign extend
+                    sampleOut = sample / 8388608.0f; // 2^23
+                } else if (bits == 16) {
+                    int16_t sample = static_cast<int16_t>(p[0] | (p[1] << 8));
+                    sampleOut = sample / 32768.0f; // 2^15
+                }
+                out[i * channels + ch] = sampleOut;
             } else {
-                out[i * server->current_wav.channels + ch] = 0.0f;
+                out[i * channels + ch] = 0.0f;
             }
         }
+        pos += frameSize;
     }
 
-    // Update position atomically without locking
+    // Update position atomically without locking (byte offset)
     server->current_position.store(pos, std::memory_order_release);
 
     // Notify HTTP/TCP clients that new data is available (non-blocking)
@@ -775,8 +782,8 @@ WavFile Server::loadWav(const std::string& filename) {
             if (audioFormat != 1)
                 throw std::runtime_error("Only PCM WAV supported");
 
-            if (wav.bitsPerSample != 24)
-                throw std::runtime_error("Only 24-bit WAV supported");
+            if (wav.bitsPerSample != 24 && wav.bitsPerSample != 16)
+                throw std::runtime_error("Only 16-bit or 24-bit WAV supported");
 
             f.ignore(chunkSize - 16);
         }
