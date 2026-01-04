@@ -316,32 +316,38 @@ void Server::handleHttpClient(int client) {
             return;
         }
 
-        std::string filename;
-        std::string filedata;
-        if (!parseMultipartSingleFile(body, boundary, filename, filedata)) {
-            sendHttpResponse(client, "{\"error\":\"bad multipart\"}", "application/json", 400);
-            return;
-        }
+        // Spawn background thread to process upload asynchronously
+        std::thread([this, body, boundary]() {
+            std::string filename;
+            std::string filedata;
+            if (!parseMultipartSingleFile(body, boundary, filename, filedata)) {
+                std::cerr << "[UPLOAD] Failed to parse multipart data\n";
+                return;
+            }
 
-        filename = sanitizeFilename(filename);
-        if (!ensureDir("uploads")) {
-            sendHttpResponse(client, "{\"error\":\"cannot create uploads dir\"}", "application/json", 500);
-            return;
-        }
+            filename = sanitizeFilename(filename);
+            if (!ensureDir("uploads")) {
+                std::cerr << "[UPLOAD] Cannot create uploads directory\n";
+                return;
+            }
 
-        std::string outPath = "uploads/" + filename;
-        std::ofstream ofs(outPath, std::ios::binary);
-        if (!ofs) {
-            sendHttpResponse(client, "{\"error\":\"cannot open file\"}", "application/json", 500);
-            return;
-        }
-        ofs.write(filedata.data(), static_cast<std::streamsize>(filedata.size()));
-        ofs.close();
+            std::string outPath = "uploads/" + filename;
+            std::ofstream ofs(outPath, std::ios::binary);
+            if (!ofs) {
+                std::cerr << "[UPLOAD] Cannot open file for writing: " << outPath << "\n";
+                return;
+            }
+            ofs.write(filedata.data(), static_cast<std::streamsize>(filedata.size()));
+            ofs.close();
 
-        int id = enqueueTrack(outPath);
-        playback_cv.notify_all();
+            int id = enqueueTrack(outPath);
+            playback_cv.notify_all();
 
-        sendHttpResponse(client, "{\"saved\":\"" + outPath + "\",\"bytes\":" + std::to_string(filedata.size()) + ",\"enqueued\":" + std::to_string(id) + "}", "application/json", 200);
+            std::cout << "[UPLOAD] Saved " << outPath << " (" << filedata.size() << " bytes), enqueued as #" << id << "\n";
+        }).detach();
+
+        // Immediate response - processing happens in background
+        sendHttpResponse(client, "{\"status\":\"processing\"}", "application/json", 202);
         return;
     }
 
