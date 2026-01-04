@@ -544,6 +544,13 @@
             color: var(--text-muted);
         }
 
+        .upload-status {
+            font-size: 11px;
+            color: var(--text-muted);
+            white-space: nowrap;
+            text-align: right;
+        }
+
         /* Library */
 
         .library-wrap {
@@ -740,7 +747,10 @@
 
                 <div class="field-group">
                     <label for="upload-file">Wyślij utwór z dysku (plik WAV, maks. 75 MB):</label>
-                    <input type="file" id="upload-file" accept="audio/wav">
+                    <div class="field-inline">
+                        <input type="file" id="upload-file" accept="audio/wav">
+                        <span id="upload-status" class="upload-status">Gotowy</span>
+                    </div>
                     <div class="field-inline">
                         <small style="color: var(--text-muted); flex: 1;">
                             Plik trafi do katalogu <code>uploads/</code>i zostanie dodany do kolejki.
@@ -758,7 +768,6 @@
                 </div>
 
                 <div class="meta-row">
-                    <span id="upload-status">Gotowy do wysyłania</span>
                     <span id="http-port-info">Port HTTP: …</span>
                 </div>
 
@@ -1143,11 +1152,11 @@
             const res = await fetch('/upload', { method: 'POST', body: formData });
             if (res.status !== 202 && !res.ok) throw new Error('HTTP ' + res.status);
             showToast('Plik wysłany, trwa przetwarzanie po stronie serwera.', { title: 'Upload' });
-            uploadStatus.textContent = 'Wysłano plik – oczekiwanie na przetworzenie';
+            uploadStatus.textContent = 'Wysłano';
             fileInput.value = '';
             setTimeout(() => { fetchQueue(); fetchLibrary(); }, 1000);
         } catch (e) {
-            uploadStatus.textContent = 'Błąd podczas wysyłania';
+            uploadStatus.textContent = 'Błąd';
             showToast('Nie udało się wysłać pliku.', { title: 'Błąd uploadu', error: true });
         }
     }
