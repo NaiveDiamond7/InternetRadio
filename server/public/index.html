@@ -800,6 +800,7 @@
 
     let queueItems = [];
     let dragFromIndex = null;
+    let knownServerFiles = [];
 
     function formatTime(seconds) {
         if (!isFinite(seconds) || seconds < 0) return '0:00';
@@ -1027,11 +1028,60 @@
         }
     }
 
+    function resolveServerPath(raw) {
+        const trimmed = (raw || '').trim();
+        if (!trimmed) return null;
+
+        const hasSlashPrefix = trimmed.startsWith('audio/') || trimmed.startsWith('uploads/');
+
+        const baseNames = [];
+        if (hasSlashPrefix) {
+            baseNames.push(trimmed);
+        } else {
+            baseNames.push('audio/' + trimmed);
+            baseNames.push('uploads/' + trimmed);
+        }
+
+        const candidates = [];
+        for (const base of baseNames) {
+            const lastSegment = base.split('/').pop() || '';
+            const hasDot = lastSegment.includes('.');
+            if (hasDot) {
+                candidates.push(base);
+            } else {
+                candidates.push(base + '.wav');
+                candidates.push(base);
+            }
+        }
+
+        for (const c of candidates) {
+            if (knownServerFiles.includes(c)) return c;
+        }
+        return null;
+    }
+
     async function enqueueFromText() {
         const input = document.getElementById('queue-filename');
-        const value = (input.value || '').trim();
-        if (!value) {
+        const rawValue = (input.value || '').trim();
+        if (!rawValue) {
             showToast('Podaj ścieżkę do pliku WAV po stronie serwera.', { title: 'Uwaga' });
+            return;
+        }
+
+        if (!knownServerFiles.length) {
+            showToast('Lista plików na serwerze jeszcze się ładuje. Spróbuj ponownie za chwilę lub wybierz plik z listy poniżej.', {
+                title: 'Brak listy plików',
+                error: false
+            });
+            return;
+        }
+
+        const resolved = resolveServerPath(rawValue);
+        if (!resolved) {
+            showToast('Taki plik nie istnieje na serwerze. Skorzystaj z listy poniżej (Audio/ lub Uploads/) lub wpisz nazwę pliku, np. berdly lub audio/berdly.wav.', {
+                title: 'Błędna ścieżka',
+                error: true
+            });
             return;
         }
 
@@ -1039,11 +1089,11 @@
             const res = await fetch('/queue', {
                 method: 'POST',
                 headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-                body: value + '\n'
+                body: resolved + '\n'
             });
             if (!res.ok) throw new Error('HTTP ' + res.status);
             const data = await res.json();
-            showToast('Dodano do kolejki: ' + (data.file || value), { title: 'Dodano' });
+            showToast('Dodano do kolejki: ' + (data.file || resolved), { title: 'Dodano' });
             input.value = '';
             await fetchQueue();
         } catch (e) {
@@ -1088,9 +1138,13 @@
             const audio = Array.isArray(data.audio) ? data.audio : [];
             const uploads = Array.isArray(data.uploads) ? data.uploads : [];
 
+            knownServerFiles = audio.concat(uploads);
+
             renderLibraryList(libraryAudioEl, audio, 'audio');
             renderLibraryList(libraryUploadsEl, uploads, 'uploads');
         } catch (e) {
+            knownServerFiles = [];
+
             if (libraryAudioEl) {
                 libraryAudioEl.innerHTML = '<div class="library-item"><span class="library-name">Błąd ładowania listy.</span></div>';
             }

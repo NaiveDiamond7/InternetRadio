@@ -506,6 +506,13 @@ void Server::handleHttpClient(int client) {
                 sendHttpResponse(client, "{\"error\":\"filename required\"}", "application/json", 400);
                 return;
             }
+
+            struct stat st{};
+            if (stat(fname.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) {
+                sendHttpResponse(client, "{\"error\":\"file not found on server\"}", "application/json", 400);
+                return;
+            }
+
             int id = enqueueTrack(fname);
             // Wake streaming loop in case it was idle
             playback_cv.notify_all();
