@@ -5,10 +5,10 @@
 #include <arpa/inet.h>
 #include <cstring>
 #include <fstream>
+#include <stdexcept>
+#include <algorithm>
+#include <iterator>
 #include <chrono>
-#include <vector>
-
-constexpr size_t AUDIO_BLOCK = 4096;
 
 Server::Server(int port) : port(port) {}
 
@@ -16,16 +16,57 @@ Server::~Server() {
     stop();
 }
 
+//
+// ======================= PORTAUDIO CALLBACK =======================
+//
+int portaudioCallback(
+    const void*,
+    void* output,
+    unsigned long framesPerBuffer,
+    const PaStreamCallbackTimeInfo*,
+    PaStreamCallbackFlags,
+    void* userData
+) {
+    Server* server = static_cast<Server*>(userData);
+    float* out = static_cast<float*>(output);
+
+    std::lock_guard<std::mutex> lock(server->playback_mutex);
+
+    for (unsigned long i = 0; i < framesPerBuffer; ++i) {
+        for (int ch = 0; ch < server->current_wav.channels; ++ch) {
+            if (server->current_position + 3 <= server->current_wav.data.size()) {
+                const uint8_t* p = server->current_wav.data.data() + server->current_position;
+                // Convert 24-bit PCM to float
+                int32_t sample =
+                    (p[0]) |
+                    (p[1] << 8) |
+                    (p[2] << 16);
+                if (sample & 0x800000)
+                    sample |= ~0xFFFFFF;
+                out[i * server->current_wav.channels + ch] = sample / 8388608.0f;
+                server->current_position += 3;
+            } else {
+                out[i * server->current_wav.channels + ch] = 0.0f;
+            }
+        }
+    }
+
+    // Notify HTTP/TCP clients that new data is available
+    server->playback_cv.notify_all();
+
+    return (server->current_position >= server->current_wav.data.size())
+           ? paComplete
+           : paContinue;
+}
+
+
 void Server::start() {
-
-    playlist.push_back({1, "berdly.wav"});
-    playlist.push_back({2, "paranoia_intro.wav"});
-    playlist.push_back({3, "give_the_anarchist_a_cigarette.wav"});
-    playlist.push_back({4, "keine_lust.wav"});
-
     running = true;
     setupSocket();
     setupHttpSocket();
+    
+    // Initialize PortAudio
+    Pa_Initialize();
 
     accept_thread = std::thread(&Server::acceptLoop, this);
     stream_thread = std::thread(&Server::streamingLoop, this);
@@ -36,6 +77,12 @@ void Server::start() {
 
 void Server::stop() {
     running = false;
+
+    stopAudioStream();
+    Pa_Terminate();
+
+    if (http_socket > 0)
+        close(http_socket);
 
     if (server_socket > 0)
         close(server_socket);
@@ -70,228 +117,6 @@ void Server::setupSocket() {
     }
 }
 
-void Server::acceptLoop() {
-    while (running) {
-        sockaddr_in client_addr{};
-        socklen_t len = sizeof(client_addr);
-
-        int client = accept(server_socket, (sockaddr*)&client_addr, &len);
-        if (client < 0) continue;
-
-        std::lock_guard<std::mutex> lock(clients_mutex);
-        clients.push_back(client);
-
-        std::cout << "[SERVER] Client connected (" << clients.size() << ")\n";
-    }
-}
-
-void Server::streamingLoop() {
-    while (running) {
-
-        Track current;
-        {
-            std::lock_guard<std::mutex> lock(playlist_mutex);
-            if (playlist.empty()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(200));
-                continue;
-            }
-            current = playlist.front();
-        }
-
-        std::ifstream file(current.filename, std::ios::binary);
-        if (!file.is_open()) {
-            std::cerr << "[STREAM] Cannot open " << current.filename << "\n";
-            std::lock_guard<std::mutex> lock(playlist_mutex);
-            playlist.pop_front();
-            continue;
-        }
-
-        WavHeader header{};
-        file.read(reinterpret_cast<char*>(&header), sizeof(header));
-
-        // WAV DEBUGGING ----------------------------------------------
-        // Debug: Print what we read
-        std::cout << "[STREAM] Playing: " << current.filename << "\n";
-        std::cout << "[STREAM] WAV Header Debug:\n";
-        std::cout << "  RIFF: " << std::string(header.riff, 4) << "\n";
-        std::cout << "  ChunkSize: " << header.chunkSize << "\n";
-        std::cout << "  WAVE: " << std::string(header.wave, 4) << "\n";
-        std::cout << "  fmt: " << std::string(header.fmt, 4) << "\n";
-        std::cout << "  Subchunk1Size: " << header.subchunk1Size << "\n";
-        std::cout << "  AudioFormat: " << header.audioFormat << "\n";
-        std::cout << "  NumChannels: " << header.numChannels << "\n";
-        std::cout << "  SampleRate: " << header.sampleRate << "\n";
-        std::cout << "  ByteRate: " << header.byteRate << "\n";
-        std::cout << "  BlockAlign: " << header.blockAlign << "\n";
-        std::cout << "  BitsPerSample: " << header.bitsPerSample << "\n";
-        std::cout << "  data: " << std::string(header.data, 4) << "\n";
-        std::cout << "  DataSize: " << header.dataSize << "\n";
-        std::cout << "  Current file position: " << file.tellg() << "\n";
-        // ------------------------------------------------------------
-
-        if (header.audioFormat != 1) {
-            std::cerr << "[STREAM] Not PCM WAV\n";
-            file.close();
-            continue;
-        }
-        
-        // Check if fmt chunk is larger than 16 bytes
-        if (header.subchunk1Size != 16) {
-            std::cout << "[STREAM] WARNING: fmt chunk is " << header.subchunk1Size 
-                      << " bytes (expected 16)\n";
-            
-            // Reposition: go back to right after the fmt chunk header (position 20)
-            // Then skip the ENTIRE fmt chunk data
-            file.seekg(20, std::ios::beg);  // Position after "fmt " and size
-            file.seekg(header.subchunk1Size, std::ios::cur);  // Skip entire fmt data
-            
-            // Now read the next chunk header (should be "data")
-            char data_marker[4];
-            uint32_t data_size;
-            file.read(data_marker, 4);
-            file.read(reinterpret_cast<char*>(&data_size), 4);
-            
-            std::cout << "[STREAM] After repositioning: chunk = '" << std::string(data_marker, 4) 
-                      << "', size = " << data_size << "\n";
-            std::cout << "[STREAM] File position now: " << file.tellg() << "\n";
-            
-            // If it's not "data", it might be another chunk (like "LIST" or "fact")
-            // Keep reading chunks until we find "data"
-            while (std::string(data_marker, 4) != "data" && file.good()) {
-                std::cout << "[STREAM] Skipping chunk '" << std::string(data_marker, 4) 
-                          << "' of size " << data_size << "\n";
-                file.seekg(data_size, std::ios::cur);  // Skip this chunk's data
-                file.read(data_marker, 4);
-                file.read(reinterpret_cast<char*>(&data_size), 4);
-            }
-            
-            if (std::string(data_marker, 4) == "data") {
-                std::cout << "[STREAM] Found data chunk: size = " << data_size << "\n";
-                // Update header with correct data info
-                std::memcpy(header.data, data_marker, 4);
-                header.dataSize = data_size;
-            } else {
-                std::cerr << "[STREAM] ERROR: Could not find 'data' chunk\n";
-                file.close();
-                continue;
-            }
-        }
-        
-        // Final verification - we should be at the data section now
-        std::cout << "[STREAM] Final header state:\n";
-        std::cout << "  data marker: '" << std::string(header.data, 4) << "'\n";
-        std::cout << "  data size: " << header.dataSize << "\n";
-        std::cout << "  file position: " << file.tellg() << " (start of audio data)\n";
-        
-        if (std::string(header.data, 4) != "data") {
-            std::cerr << "[STREAM] ERROR: Still not at 'data' chunk!\n";
-            file.close();
-            continue;
-        }
-        
-        // Store current WAV header for new HTTP clients
-        {
-            std::lock_guard<std::mutex> lock(wav_header_mutex);
-            // Reconstruct a minimal, valid RIFF/WAVE header for HTTP streaming
-            // This ensures all clients get a standard-compliant header regardless of source
-            current_wav_header = WavHeader{};
-            
-            // Copy basic format info
-            current_wav_header.riff[0] = 'R'; current_wav_header.riff[1] = 'I'; 
-            current_wav_header.riff[2] = 'F'; current_wav_header.riff[3] = 'F';
-            
-            current_wav_header.wave[0] = 'W'; current_wav_header.wave[1] = 'A';
-            current_wav_header.wave[2] = 'V'; current_wav_header.wave[3] = 'E';
-            
-            current_wav_header.fmt[0] = 'f'; current_wav_header.fmt[1] = 'm';
-            current_wav_header.fmt[2] = 't'; current_wav_header.fmt[3] = ' ';
-            
-            current_wav_header.data[0] = 'd'; current_wav_header.data[1] = 'a';
-            current_wav_header.data[2] = 't'; current_wav_header.data[3] = 'a';
-            
-            // Copy format parameters from the file header
-            current_wav_header.subchunk1Size = 16;  // PCM fmt chunk is always 16 bytes
-            current_wav_header.audioFormat = header.audioFormat;
-            current_wav_header.numChannels = header.numChannels;
-            current_wav_header.sampleRate = header.sampleRate;
-            current_wav_header.byteRate = header.byteRate;
-            current_wav_header.blockAlign = header.blockAlign;
-            current_wav_header.bitsPerSample = header.bitsPerSample;
-            
-            // Set sizes for streaming (browsers need this for duration calculation)
-            // Using 0xFFFFFFFF would confuse the audio decoder
-            // Instead, use a large but realistic value
-            current_wav_header.dataSize = 0x7FFFFFFF;  // Max 32-bit signed int (~2GB)
-            current_wav_header.chunkSize = 36 + 0x7FFFFFFF;  // RIFF chunk includes 36 bytes of header
-            
-            std::cout << "[STREAM] Reconstructed WAV header for HTTP streaming:\n"
-                      << "  Format: " << current_wav_header.numChannels << " ch, "
-                      << current_wav_header.sampleRate << " Hz, "
-                      << current_wav_header.bitsPerSample << " bit\n";
-        }
-
-        current_track_size = header.dataSize;
-        current_byte_offset = 0;
-        current_elapsed = 0.0;
-        current_track_duration = static_cast<double>(header.dataSize) / header.byteRate;
-
-        std::vector<char> buffer(AUDIO_BLOCK);
-
-        while (running && !skip_requested) {
-
-            file.read(buffer.data(), buffer.size());
-            std::streamsize bytesRead = file.gcount();
-            if (bytesRead <= 0)
-                break;
-
-            {
-                std::lock_guard<std::mutex> lock(clients_mutex);
-                for (auto it = clients.begin(); it != clients.end();) {
-                    ssize_t sent = send(*it, buffer.data(), bytesRead, MSG_NOSIGNAL);
-                    if (sent <= 0) {
-                        close(*it);
-                        it = clients.erase(it);
-                    } else {
-                        ++it;
-                    }
-                }
-            }
-
-            {
-                std::lock_guard<std::mutex> lock(http_audio_clients_mutex);
-                for (auto it = http_audio_clients.begin(); it != http_audio_clients.end();) {
-                    ssize_t sent = send(*it, buffer.data(), bytesRead, MSG_NOSIGNAL);
-                    if (sent <= 0) {
-                        close(*it);
-                        it = http_audio_clients.erase(it);
-                    } else {
-                        ++it;
-                    }
-                }
-            }
-
-            current_byte_offset += bytesRead;
-            double elapsed = current_elapsed.load();
-            elapsed += static_cast<double>(bytesRead) / header.byteRate;
-            current_elapsed.store(elapsed);
-
-            auto delay = std::chrono::duration<double>(
-                static_cast<double>(bytesRead) / header.byteRate);
-            std::this_thread::sleep_for(delay);
-        }
-
-        skip_requested = false;
-        file.close();
-
-        {
-            std::lock_guard<std::mutex> lock(playlist_mutex);
-            playlist.pop_front();
-        }
-
-        std::cout << "[STREAM] Track finished\n";
-    }
-}
-
 void Server::setupHttpSocket() {
     http_socket = socket(AF_INET, SOCK_STREAM, 0);
     if (http_socket < 0) {
@@ -315,6 +140,21 @@ void Server::setupHttpSocket() {
     }
 }
 
+void Server::acceptLoop() {
+    while (running) {
+        sockaddr_in client_addr{};
+        socklen_t len = sizeof(client_addr);
+
+        int client = accept(server_socket, (sockaddr*)&client_addr, &len);
+        if (client < 0) continue;
+
+        std::lock_guard<std::mutex> lock(clients_mutex);
+        clients.push_back(client);
+
+        std::cout << "[SERVER] Client connected (" << clients.size() << ")\n";
+    }
+}
+
 void Server::httpLoop() {
     while (running) {
         sockaddr_in client_addr{};
@@ -324,112 +164,462 @@ void Server::httpLoop() {
         if (client < 0)
             continue;
 
-        char buffer[2048] = {0};
-        read(client, buffer, sizeof(buffer) - 1);
+        handleHttpClient(client);
+    }
+}
 
-        std::string request(buffer);
+void Server::sendHttpResponse(int client, const std::string& body, const std::string& contentType, int status) {
+    const char* statusText = status == 200 ? "OK" : (status == 404 ? "Not Found" : "OK");
+    std::string header =
+        "HTTP/1.1 " + std::to_string(status) + " " + statusText + "\r\n" +
+        "Content-Type: " + contentType + "\r\n" +
+        "Content-Length: " + std::to_string(body.size()) + "\r\n" +
+        "Connection: close\r\n\r\n";
 
-        if (request.find("GET /") == 0 && request.find("GET /progress") != 0 && 
-            request.find("GET /audio") != 0 && request.find("GET /skip") != 0) {
-            
-            // Serve index.html
-            std::ifstream html_file("index.html", std::ios::binary);
-            if (html_file.is_open()) {
-                std::string body((std::istreambuf_iterator<char>(html_file)),
-                                 std::istreambuf_iterator<char>());
-                html_file.close();
+    send(client, header.c_str(), header.size(), 0);
+    send(client, body.c_str(), body.size(), 0);
+    close(client);
+}
 
-                std::string response =
-                    "HTTP/1.1 200 OK\r\n"
-                    "Content-Type: text/html\r\n"
-                    "Content-Length: " + std::to_string(body.size()) + "\r\n"
-                    "Access-Control-Allow-Origin: *\r\n"
-                    "\r\n" +
-                    body;
+void Server::handleHttpClient(int client) {
+    char buffer[4096];
+    ssize_t n = recv(client, buffer, sizeof(buffer) - 1, 0);
+    if (n <= 0) {
+        close(client);
+        return;
+    }
+    buffer[n] = '\0';
 
-                write(client, response.c_str(), response.size());
-            } else {
-                const char* not_found =
-                    "HTTP/1.1 404 Not Found\r\n"
-                    "Content-Length: 0\r\n\r\n";
-                write(client, not_found, strlen(not_found));
-            }
-            close(client);
+    std::string request(buffer);
+
+    // Split headers/body
+    size_t header_end = request.find("\r\n\r\n");
+    std::string headers = header_end != std::string::npos ? request.substr(0, header_end) : request;
+    std::string body = header_end != std::string::npos ? request.substr(header_end + 4) : std::string();
+
+    // Parse first line: METHOD PATH HTTP/1.1
+    size_t method_end = headers.find(' ');
+    if (method_end == std::string::npos) {
+        close(client);
+        return;
+    }
+    size_t path_end = headers.find(' ', method_end + 1);
+    if (path_end == std::string::npos) {
+        close(client);
+        return;
+    }
+
+    std::string method = headers.substr(0, method_end);
+    std::string path = headers.substr(method_end + 1, path_end - method_end - 1);
+
+    auto trim = [](std::string s) {
+        while (!s.empty() && (s.back() == '\r' || s.back() == '\n' || s.back() == ' ' || s.back() == '\t')) s.pop_back();
+        size_t i = 0;
+        while (i < s.size() && (s[i] == ' ' || s[i] == '\t')) ++i;
+        return s.substr(i);
+    };
+
+    if (path == "/" || path == "/index.html") {
+        std::ifstream f("index.html", std::ios::binary);
+        if (!f) {
+            sendHttpResponse(client, "index not found", "text/plain", 404);
+            return;
         }
-        else if (request.find("GET /audio") == 0) {
-            
-            // Send HTTP headers for audio stream
-            // Note: Not setting Content-Length for streaming (infinite stream)
-            const char* headers =
-                "HTTP/1.1 200 OK\r\n"
-                "Content-Type: audio/wav\r\n"
-                "Cache-Control: no-cache\r\n"
-                "Connection: close\r\n"
-                "Access-Control-Allow-Origin: *\r\n"
-                "\r\n";
-            
-            write(client, headers, strlen(headers));
-            
-            // Send WAV header to the client
+        std::string body((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        sendHttpResponse(client, body, "text/html", 200);
+        return;
+    }
+
+    if (path == "/progress") {
+        double duration = 0.0;
+        double elapsed = 0.0;
+        double position = 0.0;
+
+        {
+            std::lock_guard<std::mutex> lock(playback_mutex);
+            if (current_wav.sampleRate > 0 && current_wav.channels > 0 && current_wav.bitsPerSample > 0) {
+                double bytesPerSecond = current_wav.sampleRate * current_wav.channels * (current_wav.bitsPerSample / 8.0);
+                duration = current_wav.data.size() / bytesPerSecond;
+                elapsed = current_position / bytesPerSecond;
+                if (duration > 0.0)
+                    position = elapsed / duration;
+            }
+        }
+
+        std::string body =
+            "{\"position\":" + std::to_string(position) +
+            ",\"elapsed\":" + std::to_string(elapsed) +
+            ",\"duration\":" + std::to_string(duration) + "}";
+        sendHttpResponse(client, body, "application/json", 200);
+        return;
+    }
+
+    if (path == "/skip") {
+        if (method == "POST")
+            skip_requested = true;
+        sendHttpResponse(client, "{\"status\":\"skip\"}", "application/json", 200);
+        return;
+    }
+
+    if (path == "/queue") {
+        if (method == "GET") {
+            std::string body = "{\"queue\": [";
             {
-                std::lock_guard<std::mutex> lock(wav_header_mutex);
-                write(client, reinterpret_cast<const char*>(&current_wav_header), sizeof(current_wav_header));
+                std::lock_guard<std::mutex> lock(playlist_mutex);
+                for (size_t i = 0; i < playlist.size(); ++i) {
+                    body += "\"" + playlist[i].filename + "\"";
+                    if (i + 1 < playlist.size()) body += ",";
+                }
             }
-            
-            // Add client to HTTP audio streaming list
-            {
-                std::lock_guard<std::mutex> lock(http_audio_clients_mutex);
-                http_audio_clients.push_back(client);
+            body += "]}";
+            sendHttpResponse(client, body, "application/json", 200);
+            return;
+        }
+
+        if (method == "POST") {
+            std::string fname = trim(body);
+            size_t nl = fname.find_first_of("\r\n");
+            if (nl != std::string::npos) fname = fname.substr(0, nl);
+            if (fname.empty()) {
+                sendHttpResponse(client, "{\"error\":\"filename required\"}", "application/json", 400);
+                return;
             }
-            
-            // Don't close - let streaming loop handle it
-            continue;
+            int id = enqueueTrack(fname);
+            // Wake streaming loop in case it was idle
+            playback_cv.notify_all();
+            sendHttpResponse(client, "{\"enqueued\":" + std::to_string(id) + ",\"file\":\"" + fname + "\"}", "application/json", 200);
+            return;
         }
-        else if (request.find("GET /progress") == 0) {
+    }
 
-            double elapsed   = current_elapsed.load();
-            double duration  = current_track_duration.load();
-            double position  = (duration > 0.0) ? elapsed / duration : 0.0;
-
-            std::string body =
-                "{ \"elapsed\": "  + std::to_string(elapsed)  +
-                ", \"duration\": " + std::to_string(duration) +
-                ", \"position\": " + std::to_string(position) + " }";
-
-            std::string response =
-                "HTTP/1.1 200 OK\r\n"
-                "Content-Type: application/json\r\n"
-                "Content-Length: " + std::to_string(body.size()) + "\r\n"
-                "Access-Control-Allow-Origin: *\r\n"
-                "\r\n" +
-                body;
-
-            write(client, response.c_str(), response.size());
-            close(client);
+    if (path == "/audio") {
+        if (method == "GET") {
+            streamHttpAudio(client);
+            return;
         }
-        else if (request.find("POST /skip") == 0) {
+    }
 
-            skip_requested.store(true);
+    sendHttpResponse(client, "Not Found", "text/plain", 404);
+}
+ 
+int Server::enqueueTrack(const std::string& filename) {
+    std::lock_guard<std::mutex> lock(playlist_mutex);
+    int id = next_track_id++;
+    playlist.push_back({id, filename});
+    return id;
+}
 
-            std::string body = "{ \"status\": \"skipped\" }";
+static bool send_all(int sock, const uint8_t* data, size_t len) {
+    size_t sent_total = 0;
+    while (sent_total < len) {
+        ssize_t s = send(sock, data + sent_total, len - sent_total, 0);
+        if (s <= 0) return false;
+        sent_total += static_cast<size_t>(s);
+    }
+    return true;
+}
 
-            std::string response =
-                "HTTP/1.1 200 OK\r\n"
-                "Content-Type: application/json\r\n"
-                "Content-Length: " + std::to_string(body.size()) + "\r\n"
-                "Access-Control-Allow-Origin: *\r\n"
-                "\r\n" +
-                body;
+void Server::streamHttpAudio(int client) {
+    std::vector<uint8_t> data;
+    int sampleRate = 0;
+    int channels = 0;
+    int bits = 0;
+    size_t start_pos = 0;
 
-            write(client, response.c_str(), response.size());
-            close(client);
+    {
+        std::lock_guard<std::mutex> lock(playback_mutex);
+        if (current_wav.data.empty()) {
+            sendHttpResponse(client, "No audio loaded", "text/plain", 404);
+            return;
+        }
+        data = current_wav.data; // copy for thread safety; simple for now
+        sampleRate = current_wav.sampleRate;
+        channels = current_wav.channels;
+        bits = current_wav.bitsPerSample;
+        start_pos = current_position; // start from current live position
+    }
+
+    // Very simple WAV header writer (PCM)
+    auto write_u32 = [](uint8_t* p, uint32_t v) {
+        p[0] = v & 0xFF; p[1] = (v >> 8) & 0xFF; p[2] = (v >> 16) & 0xFF; p[3] = (v >> 24) & 0xFF; };
+    auto write_u16 = [](uint8_t* p, uint16_t v) {
+        p[0] = v & 0xFF; p[1] = (v >> 8) & 0xFF; };
+
+    uint32_t data_size = static_cast<uint32_t>(data.size());
+    uint32_t byte_rate = static_cast<uint32_t>(sampleRate * channels * (bits / 8));
+    uint16_t block_align = static_cast<uint16_t>(channels * (bits / 8));
+
+    std::vector<uint8_t> header(44, 0);
+    std::memcpy(&header[0], "RIFF", 4);
+    write_u32(&header[4], 36 + data_size);
+    std::memcpy(&header[8], "WAVE", 4);
+    std::memcpy(&header[12], "fmt ", 4);
+    write_u32(&header[16], 16);
+    write_u16(&header[20], 1); // PCM
+    write_u16(&header[22], static_cast<uint16_t>(channels));
+    write_u32(&header[24], static_cast<uint32_t>(sampleRate));
+    write_u32(&header[28], byte_rate);
+    write_u16(&header[32], block_align);
+    write_u16(&header[34], static_cast<uint16_t>(bits));
+    std::memcpy(&header[36], "data", 4);
+    write_u32(&header[40], data_size);
+
+    // Chunked transfer: stream from current live position onward
+    auto send_chunk = [&](const uint8_t* ptr, size_t len) -> bool {
+        if (len == 0) return true;
+        char size_line[32];
+        int m = std::snprintf(size_line, sizeof(size_line), "%zx\r\n", len);
+        if (m <= 0) return false;
+        if (!send_all(client, reinterpret_cast<const uint8_t*>(size_line), static_cast<size_t>(m))) return false;
+        if (!send_all(client, ptr, len)) return false;
+        return send_all(client, reinterpret_cast<const uint8_t*>("\r\n"), 2);
+    };
+
+    std::string http_header =
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: audio/wav\r\n"
+        "Transfer-Encoding: chunked\r\n"
+        "Connection: close\r\n\r\n";
+
+    if (!send_all(client, reinterpret_cast<const uint8_t*>(http_header.data()), http_header.size())) {
+        close(client);
+        return;
+    }
+
+    // Send WAV header as first chunk
+    if (!send_chunk(header.data(), header.size())) { close(client); return; }
+
+    size_t sent = start_pos;
+    const size_t track_size = data.size();
+
+    while (running) {
+        size_t available = 0;
+        bool track_done = false;
+        bool do_skip = false;
+
+        {
+            std::unique_lock<std::mutex> lock(playback_mutex);
+            playback_cv.wait_for(lock, std::chrono::milliseconds(200), [&]{
+                return !running || skip_requested || current_position > sent || current_position >= track_size;
+            });
+
+            available = (current_position > sent) ? (current_position - sent) : 0;
+            track_done = current_position >= track_size;
+            do_skip = skip_requested;
+        }
+
+        if (available) {
+            size_t to_send = available;
+            if (sent + to_send > track_size) to_send = track_size - sent;
+            if (!send_chunk(data.data() + sent, to_send)) {
+                close(client);
+                return;
+            }
+            sent += to_send;
+        }
+
+        if (track_done || do_skip || !running)
+            break;
+    }
+
+    // terminating chunk
+    send_all(client, reinterpret_cast<const uint8_t*>("0\r\n\r\n"), 5);
+    close(client);
+}
+
+//
+// ======================= 24-BIT PCM → FLOAT =======================
+//
+inline float pcm24ToFloat(const uint8_t* p) {
+    int32_t sample =
+        (p[0]) |
+        (p[1] << 8) |
+        (p[2] << 16);
+
+    // sign extension
+    if (sample & 0x800000)
+        sample |= ~0xFFFFFF;
+
+    return sample / 8388608.0f; // 2^23
+}
+
+//
+// ======================= WAV LOADER =======================
+//
+WavFile Server::loadWav(const std::string& filename) {
+    std::ifstream f(filename, std::ios::binary);
+    if (!f)
+        throw std::runtime_error("Cannot open WAV file: " + filename);
+
+    char chunkId[4];
+    uint32_t chunkSize;
+
+    // RIFF
+    f.read(chunkId, 4);
+    if (std::strncmp(chunkId, "RIFF", 4) != 0)
+        throw std::runtime_error("Not a RIFF file");
+
+    f.read(reinterpret_cast<char*>(&chunkSize), 4);
+
+    f.read(chunkId, 4);
+    if (std::strncmp(chunkId, "WAVE", 4) != 0)
+        throw std::runtime_error("Not a WAVE file");
+
+    WavFile wav;
+
+    while (f) {
+        f.read(chunkId, 4);
+        f.read(reinterpret_cast<char*>(&chunkSize), 4);
+
+        if (std::strncmp(chunkId, "fmt ", 4) == 0) {
+            uint16_t audioFormat;
+            f.read(reinterpret_cast<char*>(&audioFormat), 2);
+            f.read(reinterpret_cast<char*>(&wav.channels), 2);
+            f.read(reinterpret_cast<char*>(&wav.sampleRate), 4);
+            f.ignore(6); // byteRate + blockAlign
+            f.read(reinterpret_cast<char*>(&wav.bitsPerSample), 2);
+
+            if (audioFormat != 1)
+                throw std::runtime_error("Only PCM WAV supported");
+
+            if (wav.bitsPerSample != 24)
+                throw std::runtime_error("Only 24-bit WAV supported");
+
+            f.ignore(chunkSize - 16);
+        }
+        else if (std::strncmp(chunkId, "data", 4) == 0) {
+            wav.data.resize(chunkSize);
+            f.read(reinterpret_cast<char*>(wav.data.data()), chunkSize);
+            break;
         }
         else {
-            const char* not_found =
-                "HTTP/1.1 404 Not Found\r\n"
-                "Content-Length: 0\r\n\r\n";
-            write(client, not_found, strlen(not_found));
-            close(client);
+            // skip unknown chunk
+            f.ignore(chunkSize);
         }
+    }
+
+    if (wav.data.empty())
+        throw std::runtime_error("No audio data found");
+
+    return wav;
+}
+
+//
+// ======================= SEND TO CLIENTS =======================
+//
+void Server::sendToClients(const uint8_t* buffer, size_t size) {
+    std::lock_guard<std::mutex> lock(clients_mutex);
+    
+    for (auto it = clients.begin(); it != clients.end(); ) {
+        int client = *it;
+        ssize_t sent = send(client, buffer, size, 0);
+        
+        if (sent < 0) {
+            // Connection lost, remove client
+            close(client);
+            it = clients.erase(it);
+            std::cout << "[SERVER] Client disconnected (" << clients.size() << ")\n";
+        } else {
+            ++it;
+        }
+    }
+}
+
+//
+// ======================= STREAMING LOOP =======================
+//
+void Server::streamingLoop() {
+    while (running) {
+        {
+            std::lock_guard<std::mutex> lock(playlist_mutex);
+            
+            // Check if we need to load a new track
+            if (current_position >= current_wav.data.size() || skip_requested) {
+                skip_requested = false;
+                stopAudioStream();
+                
+                if (!playlist.empty()) {
+                    Track track = playlist.front();
+                    playlist.pop_front();
+                    
+                    try {
+                        {
+                            std::lock_guard<std::mutex> pb_lock(playback_mutex);
+                            current_wav = loadWav(track.filename);
+                            current_position = 0;
+                        }
+                        std::cout << "[SERVER] Now playing: " << track.filename << "\n";
+                        std::cout << "  Sample rate: " << current_wav.sampleRate << " Hz\n";
+                        std::cout << "  Channels:    " << current_wav.channels << "\n";
+                        std::cout << "  Bit depth:   " << current_wav.bitsPerSample << "\n";
+                        
+                        // Start PortAudio stream for this track
+                        startAudioStream();
+                    }
+                    catch (const std::exception& e) {
+                        std::cerr << "[SERVER] Error loading track: " << e.what() << "\n";
+                        stopAudioStream();
+                    }
+                } else {
+                    // No more tracks in queue
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    continue;
+                }
+            }
+        }
+        
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+}
+
+//
+// ======================= PORTAUDIO STREAM MANAGEMENT =======================
+//
+void Server::startAudioStream() {
+    if (audio_stream) {
+        Pa_StopStream(audio_stream);
+        Pa_CloseStream(audio_stream);
+        audio_stream = nullptr;
+    }
+
+    if (current_wav.sampleRate <= 0 || current_wav.channels <= 0) {
+        std::cerr << "[AUDIO] Invalid WAV parameters\n";
+        return;
+    }
+
+    PaError err = Pa_OpenDefaultStream(
+        &audio_stream,
+        0,                              // no input
+        current_wav.channels,           // output channels
+        paFloat32,                      // 32-bit float
+        current_wav.sampleRate,         // sample rate
+        256,                            // frames per buffer
+        portaudioCallback,              // callback
+        this                            // user data
+    );
+
+    if (err != paNoError) {
+        std::cerr << "[AUDIO] Error opening stream: " << Pa_GetErrorText(err) << "\n";
+        audio_stream = nullptr;
+        return;
+    }
+
+    err = Pa_StartStream(audio_stream);
+    if (err != paNoError) {
+        std::cerr << "[AUDIO] Error starting stream: " << Pa_GetErrorText(err) << "\n";
+        Pa_CloseStream(audio_stream);
+        audio_stream = nullptr;
+        return;
+    }
+
+    std::cout << "[AUDIO] PortAudio stream started\n";
+}
+
+void Server::stopAudioStream() {
+    if (audio_stream) {
+        Pa_StopStream(audio_stream);
+        Pa_CloseStream(audio_stream);
+        audio_stream = nullptr;
+        std::cout << "[AUDIO] PortAudio stream stopped\n";
     }
 }

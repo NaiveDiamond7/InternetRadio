@@ -4,6 +4,10 @@
 #include <thread>
 #include <mutex>
 #include <atomic>
+#include <condition_variable>
+#include <string>
+#include <cstdint>
+#include <portaudio.h>
 #include "track.h"
 #include "wav.h"
 
@@ -18,17 +22,12 @@ public:
 private:
     int port;
     int server_socket;
-    int http_socket;
-
+    int http_socket{-1};
     std::atomic<bool> running{false};
 
     // Klienci strumienia
     std::vector<int> clients;
     std::mutex clients_mutex;
-
-    // HTTP clients (audio stream)
-    std::vector<int> http_audio_clients;
-    std::mutex http_audio_clients_mutex;
 
     // Kolejka utworów
     std::deque<Track> playlist;
@@ -36,17 +35,14 @@ private:
 
     // Flagi sterujące
     std::atomic<bool> skip_requested{false};
+    std::atomic<int> next_track_id{1};
 
-    // Śledzenie przebiegu utworu
-    std::atomic<size_t> current_byte_offset{0};
-    std::atomic<size_t> current_track_size{0};
-    std::atomic<double> current_track_duration{0.0};
-    std::atomic<double> current_elapsed{0.0};
-    
-    // Current track WAV header
-    WavHeader current_wav_header{};
-    std::mutex wav_header_mutex;
-
+    // PortAudio stream i stan odtwarzania
+    PaStream* audio_stream = nullptr;
+    WavFile current_wav;
+    size_t current_position = 0;
+    std::mutex playback_mutex;
+    std::condition_variable playback_cv;
 
     // Wątki
     std::thread accept_thread;
@@ -54,9 +50,22 @@ private:
     std::thread http_thread;
 
     // Metody wątków
-    void setupSocket();
-    void setupHttpSocket();
     void acceptLoop();
     void streamingLoop();
     void httpLoop();
+
+    // Pomocnicze
+    void setupSocket();
+    void setupHttpSocket();
+    WavFile loadWav(const std::string& filename);
+    void sendToClients(const uint8_t* buffer, size_t size);
+    void handleHttpClient(int client);
+    void sendHttpResponse(int client, const std::string& body, const std::string& contentType = "text/plain", int status = 200);
+    int enqueueTrack(const std::string& filename);
+    void streamHttpAudio(int client);
+    void startAudioStream();
+    void stopAudioStream();
+
+    // PortAudio callback (static wrapper)
+    friend int portaudioCallback(const void*, void*, unsigned long, const PaStreamCallbackTimeInfo*, PaStreamCallbackFlags, void*);
 };
