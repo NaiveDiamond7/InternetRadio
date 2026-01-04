@@ -12,6 +12,8 @@
 #include <sstream>
 #include <cctype>
 #include <sys/stat.h>
+#include <cstdlib>
+#include <ctime>
 
 Server::Server(int port) : port(port) {}
 
@@ -170,6 +172,12 @@ static bool parseMultipartSingleFile(
 void Server::start() {
     running = true;
     setupHttpSocket();
+    // Zainicjalizuj generator losowy dla automatycznej kolejki
+    std::srand(static_cast<unsigned int>(std::time(nullptr)));
+
+    // Bazowa kolejka: najpierw berdly, potem give_the_anarchist
+    enqueueTrack("berdly.wav");
+    enqueueTrack("give_the_anarchist.wav");
     
     // Initialize PortAudio
     Pa_Initialize();
@@ -676,7 +684,14 @@ void Server::streamingLoop() {
                         stopAudioStream();
                     }
                 } else {
-                    // No more tracks in queue
+                    // No more tracks in queue – dodaj losowo bazowe utwory,
+                    // aby radio grało w kółko, gdy nic nie jest w kolejce.
+                    const char* baseTracks[] = {"berdly.wav", "give_the_anarchist.wav"};
+                    const int baseCount = 2;
+                    int idx = std::rand() % baseCount;
+                    int id = next_track_id++;
+                    playlist.push_back({id, baseTracks[idx]});
+                    std::cout << "[SERVER] Auto-enqueued: " << baseTracks[idx] << " (#" << id << ")\n";
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                     continue;
                 }

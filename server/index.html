@@ -1,41 +1,810 @@
 <!DOCTYPE html>
 <html lang="pl">
 <head>
-<meta charset="UTF-8">
-<title>Radio WAV</title>
-<style>
-body { font-family: sans-serif; background:#111; color:#eee; }
-progress { width: 100%; height: 20px; }
-button { font-size: 16px; padding: 10px; }
-</style>
+    <meta charset="UTF-8">
+    <title>Radio WAV</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        :root {
+            --bg: #050814;
+            --bg-card: #0b1024;
+            --bg-soft: #11172f;
+            --accent: #4f8cff;
+            --accent-soft: rgba(79, 140, 255, 0.2);
+            --accent-strong: rgba(79, 140, 255, 0.9);
+            --text: #f5f7ff;
+            --text-muted: #9ba3c5;
+            --danger: #ff5f5f;
+            --radius-lg: 20px;
+            --radius-md: 12px;
+            --shadow-soft: 0 22px 50px rgba(0, 0, 0, 0.7);
+            --border-subtle: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: radial-gradient(circle at top, #181f45 0, #050814 40%, #02030a 100%);
+            color: var(--text);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+        }
+
+        .app {
+            width: 100%;
+            max-width: 960px;
+            background: linear-gradient(150deg, rgba(15, 24, 60, 0.95), rgba(6, 10, 30, 0.98));
+            border-radius: 28px;
+            box-shadow: var(--shadow-soft);
+            border: 1px solid rgba(255, 255, 255, 0.04);
+            padding: 20px 22px 18px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .app::before {
+            content: "";
+            position: absolute;
+            inset: -120px -150px auto auto;
+            background: radial-gradient(circle at top, rgba(120, 170, 255, 0.8), transparent 60%);
+            opacity: 0.35;
+            pointer-events: none;
+        }
+
+        .app-inner {
+            position: relative;
+            z-index: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .brand-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 16px;
+            background: radial-gradient(circle at 25% 20%, #ffdd7a, #ff9b5d 40%, #ff4b91 80%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #1a0612;
+            font-size: 22px;
+            box-shadow: 0 16px 36px rgba(0, 0, 0, 0.7);
+        }
+
+        .brand-text h1 {
+            margin: 0;
+            font-size: 20px;
+            letter-spacing: 0.03em;
+        }
+
+        .brand-text span {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .status-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 11px;
+            border-radius: 999px;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            background: radial-gradient(circle at 0 0, rgba(151, 196, 255, 0.25), transparent 55%),
+                        linear-gradient(135deg, rgba(6, 12, 36, 0.95), rgba(3, 7, 24, 0.98));
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            color: var(--text-muted);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 999px;
+            background: #67ff8a;
+            box-shadow: 0 0 12px rgba(103, 255, 138, 0.9);
+        }
+
+        main {
+            display: grid;
+            grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+            gap: 16px;
+        }
+
+        @media (max-width: 820px) {
+            main { grid-template-columns: minmax(0, 1fr); }
+        }
+
+        .card {
+            background: radial-gradient(circle at top left, rgba(108, 150, 255, 0.18), transparent 60%),
+                        linear-gradient(155deg, rgba(6, 10, 30, 0.96), rgba(5, 7, 24, 0.98));
+            border-radius: var(--radius-lg);
+            border: var(--border-subtle);
+            padding: 14px 14px 12px;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .card-title {
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            color: var(--text-muted);
+        }
+
+        .card-sub {
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        /* Now playing */
+
+        .now-playing {
+            display: grid;
+            grid-template-columns: 96px minmax(0, 1fr);
+            gap: 14px;
+            align-items: center;
+        }
+
+        @media (max-width: 520px) {
+            .now-playing { grid-template-columns: minmax(0, 1fr); }
+        }
+
+        .cover {
+            width: 96px;
+            height: 96px;
+            border-radius: 22px;
+            padding: 1px;
+            background: conic-gradient(from 220deg, #ffcf71, #f99fc8, #6a7bff, #7cf4ff, #ffcf71);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.8);
+        }
+
+        .cover-inner {
+            width: 100%;
+            height: 100%;
+            border-radius: inherit;
+            background: radial-gradient(circle at 10% 0, rgba(255, 255, 255, 0.16), transparent 55%),
+                        radial-gradient(circle at 80% 120%, rgba(118, 160, 255, 0.32), transparent 50%),
+                        #050815;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .cover-wave {
+            position: absolute;
+            inset: 40% -40%;
+            background: linear-gradient(90deg, rgba(255, 255, 255, 0.15) 0, rgba(255, 255, 255, 0) 50%, rgba(255, 255, 255, 0.18) 100%);
+            opacity: 0.45;
+            mix-blend-mode: screen;
+            animation: wave-slide 7s linear infinite;
+        }
+
+        @keyframes wave-slide {
+            from { transform: translateX(-30%); }
+            to { transform: translateX(30%); }
+        }
+
+        .cover-circle {
+            width: 50px;
+            height: 50px;
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            backdrop-filter: blur(6px);
+        }
+
+        .cover-bars {
+            display: flex;
+            gap: 3px;
+            align-items: flex-end;
+        }
+
+        .cover-bar {
+            width: 4px;
+            border-radius: 999px;
+            background: linear-gradient(to top, rgba(255, 255, 255, 0.2), #fff);
+            height: 8px;
+            animation: bar-bounce 1.2s ease-in-out infinite;
+            transform-origin: bottom;
+        }
+
+        .cover-bar:nth-child(2) { animation-delay: 0.15s; }
+        .cover-bar:nth-child(3) { animation-delay: 0.3s; }
+        .cover-bar:nth-child(4) { animation-delay: 0.45s; }
+
+        @keyframes bar-bounce {
+            0%, 100% { transform: scaleY(0.5); }
+            40% { transform: scaleY(1.6); }
+            70% { transform: scaleY(0.8); }
+        }
+
+        .track-meta {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .track-name {
+            font-size: 16px;
+            font-weight: 600;
+            word-break: break-all;
+        }
+
+        .track-times {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .progress-shell { margin-top: 4px; }
+
+        .progress-outer {
+            position: relative;
+            height: 8px;
+            border-radius: 999px;
+            background: rgba(6, 10, 34, 0.96);
+            overflow: hidden;
+        }
+
+        .progress-inner {
+            position: absolute;
+            inset: 1px;
+            border-radius: inherit;
+            background: linear-gradient(90deg, var(--accent-strong), #91e5ff);
+            width: 0%;
+            box-shadow: 0 0 18px rgba(79, 140, 255, 0.9);
+            transform-origin: left;
+        }
+
+        .controls-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }
+
+        .controls-main { display: flex; gap: 8px; }
+
+        button {
+            border: none;
+            outline: none;
+            border-radius: 999px;
+            font-size: 13px;
+            padding: 7px 16px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: linear-gradient(135deg, var(--accent), #91e5ff);
+            color: #020410;
+            font-weight: 600;
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+            transition: transform 0.08s ease, box-shadow 0.08s ease, filter 0.15s ease;
+            box-shadow: 0 12px 30px rgba(45, 114, 255, 0.65);
+        }
+
+        button:hover {
+            transform: translateY(-1px);
+            filter: brightness(1.06);
+            box-shadow: 0 18px 40px rgba(46, 120, 255, 0.8);
+        }
+
+        button:active {
+            transform: translateY(0px) scale(0.99);
+            box-shadow: 0 10px 24px rgba(46, 120, 255, 0.7);
+        }
+
+        .btn-secondary {
+            background: rgba(7, 12, 36, 0.98);
+            color: var(--text);
+            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.7);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .badge {
+            font-size: 11px;
+            padding: 4px 10px;
+            border-radius: 999px;
+            background: rgba(5, 10, 32, 0.96);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            color: var(--text-muted);
+        }
+
+        .audio-wrap {
+            margin-top: 10px;
+            background: rgba(5, 10, 32, 0.96);
+            border-radius: var(--radius-md);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            padding: 9px 10px 6px;
+        }
+
+        audio { width: 100%; }
+
+        /* Queue */
+
+        .queue-list {
+            margin-top: 4px;
+            max-height: 230px;
+            overflow-y: auto;
+        }
+
+        .queue-empty {
+            font-size: 13px;
+            color: var(--text-muted);
+            opacity: 0.9;
+            padding: 12px 2px;
+        }
+
+        .queue-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 7px 2px;
+            border-radius: 10px;
+            transition: background 0.12s ease, transform 0.06s ease;
+        }
+
+        .queue-item:hover {
+            background: rgba(12, 22, 58, 0.9);
+            transform: translateY(-0.5px);
+        }
+
+        .queue-left {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 0;
+        }
+
+        .queue-index {
+            width: 18px;
+            text-align: right;
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        .queue-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 999px;
+            background: rgba(145, 229, 255, 0.7);
+            box-shadow: 0 0 8px rgba(145, 229, 255, 0.9);
+        }
+
+        .queue-name {
+            font-size: 13px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .queue-pill {
+            font-size: 10px;
+            padding: 2px 7px;
+            border-radius: 999px;
+            background: rgba(5, 12, 40, 0.96);
+            color: var(--text-muted);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        /* Inputs */
+
+        .field-group {
+            margin-top: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        label {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        input[type="text"],
+        input[type="file"] {
+            width: 100%;
+            border-radius: 11px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            padding: 8px 10px;
+            font-size: 13px;
+            background: rgba(5, 10, 32, 0.96);
+            color: var(--text);
+        }
+
+        input[type="text"]::placeholder {
+            color: rgba(155, 163, 197, 0.65);
+        }
+
+        input[type="file"] { padding: 5px 4px; }
+
+        .field-inline {
+            display: flex;
+            gap: 8px;
+            margin-top: 6px;
+        }
+
+        .field-inline > *:first-child { flex: 1; }
+
+        .meta-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            margin-top: 6px;
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        /* Toast */
+
+        .toast {
+            position: fixed;
+            right: 16px;
+            bottom: 16px;
+            max-width: 320px;
+            padding: 10px 13px;
+            border-radius: 14px;
+            background: rgba(4, 10, 32, 0.96);
+            border: 1px solid rgba(145, 229, 255, 0.45);
+            color: var(--text);
+            font-size: 13px;
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.86);
+            display: none;
+            align-items: flex-start;
+            gap: 8px;
+            z-index: 20;
+        }
+
+        .toast-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 999px;
+            background: #91e5ff;
+            box-shadow: 0 0 10px rgba(145, 229, 255, 0.9);
+            margin-top: 4px;
+            flex-shrink: 0;
+        }
+
+        .toast--error { border-color: rgba(255, 123, 151, 0.85); }
+
+        .toast--error .toast-dot {
+            background: #ff7b97;
+            box-shadow: 0 0 10px rgba(255, 123, 151, 0.9);
+        }
+
+        .toast-title {
+            font-size: 12px;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+        }
+
+        .toast-body { margin-top: 2px; }
+    </style>
 </head>
 <body>
+<div class="app">
+    <div class="app-inner">
+        <header>
+            <div class="brand">
+                <div class="brand-icon">📻</div>
+                <div class="brand-text">
+                    <h1>Radio WAV</h1>
+                    <span>Wspólne słuchanie WAV przez TCP</span>
+                </div>
+            </div>
+            <div class="status-chip">
+                <span class="status-dot"></span>
+                <span id="status-text">Połączono z serwerem</span>
+            </div>
+        </header>
 
-<h1>📻 Radio WAV</h1>
+        <main>
+            <section class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Teraz grane</div>
+                        <div class="card-sub">Strumień audio na żywo z serwera</div>
+                    </div>
+                    <span class="badge" id="queue-summary">Kolejka: 0 utworów</span>
+                </div>
 
-<audio id="player" controls autoplay src="/audio"></audio>
+                <div class="now-playing">
+                    <div class="cover">
+                        <div class="cover-inner">
+                            <div class="cover-wave"></div>
+                            <div class="cover-circle">
+                                <div class="cover-bars">
+                                    <div class="cover-bar"></div>
+                                    <div class="cover-bar"></div>
+                                    <div class="cover-bar"></div>
+                                    <div class="cover-bar"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
 
-<progress id="progress" value="0" max="1"></progress>
+                    <div class="track-meta">
+                        <div class="track-name" id="track-filename">Oczekiwanie na pierwszy utwór…</div>
+                        <div class="track-times">
+                            <span id="time-elapsed">0:00</span>
+                            <span id="time-total">0:00</span>
+                        </div>
+                        <div class="progress-shell">
+                            <div class="progress-outer" aria-label="Postęp utworu">
+                                <div class="progress-inner" id="progress-bar"></div>
+                            </div>
+                        </div>
+                        <div class="controls-row">
+                            <div class="controls-main">
+                                <button type="button" id="btn-skip">
+                                    ⏭ <span>Następny</span>
+                                </button>
+                                <button type="button" class="btn-secondary" id="btn-refresh-queue">
+                                    🔄 Odśwież kolejkę
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
 
-<p id="time">0 / 0</p>
+                <div class="audio-wrap">
+                    <audio id="player" controls autoplay src="/audio"></audio>
+                </div>
+            </section>
 
-<button onclick="skip()">⏭ Skip</button>
+            <section class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Kolejka</div>
+                        <div class="card-sub">Pliki WAV w oczekiwaniu na odtworzenie</div>
+                    </div>
+                </div>
+
+                <div id="queue" class="queue-list">
+                    <div class="queue-empty">Brak utworów w kolejce. Dodaj coś poniżej.</div>
+                </div>
+
+                <div class="field-group">
+                    <label for="queue-filename">Dodaj istniejący plik WAV (ścieżka po stronie serwera):</label>
+                    <div class="field-inline">
+                        <input type="text" id="queue-filename" placeholder="np. music/example.wav">
+                        <button type="button" class="btn-secondary" id="btn-enqueue">Dodaj</button>
+                    </div>
+                </div>
+
+                <div class="field-group">
+                    <label for="upload-file">Wyślij plik WAV z dysku (maks. 50 MB):</label>
+                    <input type="file" id="upload-file" accept="audio/wav">
+                    <div class="field-inline">
+                        <small style="color: var(--text-muted); flex: 1;">
+                            Plik trafi do katalogu <code>uploads/</code> na serwerze i zostanie automatycznie dodany do kolejki.
+                        </small>
+                        <button type="button" class="btn-secondary" id="btn-upload">Wyślij</button>
+                    </div>
+                </div>
+
+                <div class="meta-row">
+                    <span id="upload-status">Gotowy do wysyłania</span>
+                    <span>Port HTTP: 8080</span>
+                </div>
+            </section>
+        </main>
+    </div>
+</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite">
+    <div class="toast-dot"></div>
+    <div>
+        <div class="toast-title" id="toast-title">Status</div>
+        <div class="toast-body" id="toast-body">Wiadomość</div>
+    </div>
+</div>
 
 <script>
-async function updateProgress() {
-    const res = await fetch("/progress");
-    const data = await res.json();
+    const progressBar = document.getElementById('progress-bar');
+    const timeElapsedEl = document.getElementById('time-elapsed');
+    const timeTotalEl = document.getElementById('time-total');
+    const queueContainer = document.getElementById('queue');
+    const queueSummary = document.getElementById('queue-summary');
+    const trackFilenameEl = document.getElementById('track-filename');
+    const uploadStatus = document.getElementById('upload-status');
+    const statusText = document.getElementById('status-text');
+    const toastEl = document.getElementById('toast');
+    const toastTitleEl = document.getElementById('toast-title');
+    const toastBodyEl = document.getElementById('toast-body');
 
-    document.getElementById("progress").value = data.position;
-    document.getElementById("time").innerText =
-        data.elapsed.toFixed(1) + " / " + data.duration.toFixed(1);
-}
+    function formatTime(seconds) {
+        if (!isFinite(seconds) || seconds < 0) return '0:00';
+        const s = Math.floor(seconds);
+        const m = Math.floor(s / 60);
+        const r = s % 60;
+        return m + ':' + String(r).padStart(2, '0');
+    }
 
-async function skip() {
-    await fetch("/skip", { method: "POST" });
-}
+    function showToast(message, opts = {}) {
+        const { title = 'Status', error = false, timeout = 2600 } = opts;
+        toastTitleEl.textContent = title;
+        toastBodyEl.textContent = message;
+        toastEl.classList.toggle('toast--error', !!error);
+        toastEl.style.display = 'flex';
+        clearTimeout(showToast._timeout);
+        showToast._timeout = setTimeout(() => {
+            toastEl.style.display = 'none';
+        }, timeout);
+    }
 
-setInterval(updateProgress, 500);
+    async function updateProgress() {
+        try {
+            const res = await fetch('/progress', { cache: 'no-store' });
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const data = await res.json();
+
+            const position = Math.max(0, Math.min(1, data.position || 0));
+            progressBar.style.width = (position * 100).toFixed(1) + '%';
+
+            const elapsed = Number(data.elapsed) || 0;
+            const duration = Number(data.duration) || 0;
+            timeElapsedEl.textContent = formatTime(elapsed);
+            timeTotalEl.textContent = duration > 0 ? formatTime(duration) : '∞';
+
+            statusText.textContent = 'Odtwarzanie aktywne';
+        } catch (e) {
+            statusText.textContent = 'Brak odpowiedzi serwera';
+        }
+    }
+
+    async function fetchQueue() {
+        try {
+            const res = await fetch('/queue', { cache: 'no-store' });
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const data = await res.json();
+            const items = Array.isArray(data.queue) ? data.queue : [];
+
+            queueContainer.innerHTML = '';
+
+            if (!items.length) {
+                queueContainer.innerHTML = '<div class="queue-empty">Brak utworów w kolejce. Dodaj coś poniżej.</div>';
+                queueSummary.textContent = 'Kolejka: 0 utworów';
+                trackFilenameEl.textContent = 'Oczekiwanie na pierwszy utwór…';
+                return;
+            }
+
+            items.forEach((filename, index) => {
+                const row = document.createElement('div');
+                row.className = 'queue-item';
+                row.innerHTML = `
+                    <div class="queue-left">
+                        <div class="queue-index">${index + 1}</div>
+                        <div class="queue-dot"></div>
+                        <div class="queue-name" title="${filename}">${filename}</div>
+                    </div>
+                    <div class="queue-pill">W kolejce</div>
+                `;
+                queueContainer.appendChild(row);
+            });
+
+            queueSummary.textContent = 'Kolejka: ' + items.length + (items.length === 1 ? ' utwór' : ' utworów');
+            trackFilenameEl.textContent = items[0];
+        } catch (e) {
+            queueContainer.innerHTML = '<div class="queue-empty">Nie udało się pobrać kolejki.</div>';
+        }
+    }
+
+    async function skipTrack() {
+        try {
+            const res = await fetch('/skip', { method: 'POST' });
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            showToast('Przeskakiwanie do następnego utworu…', { title: 'Skip' });
+            await fetchQueue();
+        } catch (e) {
+            showToast('Nie udało się wysłać żądania skip.', { title: 'Błąd', error: true });
+        }
+    }
+
+    async function enqueueFromText() {
+        const input = document.getElementById('queue-filename');
+        const value = (input.value || '').trim();
+        if (!value) {
+            showToast('Podaj ścieżkę do pliku WAV po stronie serwera.', { title: 'Uwaga' });
+            return;
+        }
+
+        try {
+            const res = await fetch('/queue', {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+                body: value + '\n'
+            });
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const data = await res.json();
+            showToast('Dodano do kolejki: ' + (data.file || value), { title: 'Dodano' });
+            input.value = '';
+            await fetchQueue();
+        } catch (e) {
+            showToast('Nie udało się dodać pliku do kolejki.', { title: 'Błąd', error: true });
+        }
+    }
+
+    async function uploadFile() {
+        const fileInput = document.getElementById('upload-file');
+        const file = fileInput.files && fileInput.files[0];
+        if (!file) {
+            showToast('Wybierz plik WAV do wysłania.', { title: 'Uwaga' });
+            return;
+        }
+        if (file.size > 50 * 1024 * 1024) {
+            showToast('Plik jest większy niż 50 MB.', { title: 'Za duży plik', error: true });
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append('file', file, file.name);
+        uploadStatus.textContent = 'Wysyłanie…';
+
+        try {
+            const res = await fetch('/upload', { method: 'POST', body: formData });
+            if (res.status !== 202 && !res.ok) throw new Error('HTTP ' + res.status);
+            showToast('Plik wysłany, trwa przetwarzanie po stronie serwera.', { title: 'Upload' });
+            uploadStatus.textContent = 'Wysłano plik – oczekiwanie na przetworzenie';
+            fileInput.value = '';
+            setTimeout(fetchQueue, 1000);
+        } catch (e) {
+            uploadStatus.textContent = 'Błąd podczas wysyłania';
+            showToast('Nie udało się wysłać pliku.', { title: 'Błąd uploadu', error: true });
+        }
+    }
+
+    document.getElementById('btn-skip').addEventListener('click', skipTrack);
+    document.getElementById('btn-refresh-queue').addEventListener('click', fetchQueue);
+    document.getElementById('btn-enqueue').addEventListener('click', enqueueFromText);
+    document.getElementById('queue-filename').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            enqueueFromText();
+        }
+    });
+    document.getElementById('btn-upload').addEventListener('click', uploadFile);
+
+    updateProgress();
+    fetchQueue();
+    setInterval(updateProgress, 700);
+    setInterval(fetchQueue, 4000);
 </script>
 
 </body>
