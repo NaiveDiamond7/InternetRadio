@@ -539,7 +539,7 @@
                 <div class="card-header">
                     <div>
                         <div class="card-title">Teraz grane</div>
-                        <div class="card-sub">Strumień audio na żywo z serwera</div>
+                        <div class="card-sub">Utwór odtwarzany na żywo z serwera</div>
                     </div>
                     <span class="badge" id="queue-summary">Kolejka: 0 utworów</span>
                 </div>
@@ -560,7 +560,7 @@
                     </div>
 
                     <div class="track-meta">
-                        <div class="track-name" id="track-filename">Oczekiwanie na pierwszy utwór…</div>
+                        <div class="track-name" id="track-filename">Oczekiwanie na utwór…</div>
                         <div class="track-times">
                             <span id="time-elapsed">0:00</span>
                             <span id="time-total">0:00</span>
@@ -591,8 +591,8 @@
             <section class="card">
                 <div class="card-header">
                     <div>
-                        <div class="card-title">Kolejka</div>
-                        <div class="card-sub">Pliki WAV w oczekiwaniu na odtworzenie</div>
+                        <div class="card-title">Kolejka utworów</div>
+                        <div class="card-sub">Utwory w kolejce do odtworzenia</div>
                     </div>
                 </div>
 
@@ -601,7 +601,7 @@
                 </div>
 
                 <div class="field-group">
-                    <label for="queue-filename">Dodaj istniejący plik WAV (ścieżka po stronie serwera):</label>
+                    <label for="queue-filename">Dodaj istniejący utwór (plik WAV po stronie serwera):</label>
                     <div class="field-inline">
                         <input type="text" id="queue-filename" placeholder="np. music/example.wav">
                         <button type="button" class="btn-secondary" id="btn-enqueue">Dodaj</button>
@@ -609,7 +609,7 @@
                 </div>
 
                 <div class="field-group">
-                    <label for="upload-file">Wyślij plik WAV z dysku (maks. 50 MB):</label>
+                    <label for="upload-file">Wyślij utwór z dysku (plik WAV, maks. 50 MB):</label>
                     <input type="file" id="upload-file" accept="audio/wav">
                     <div class="field-inline">
                         <small style="color: var(--text-muted); flex: 1;">
@@ -683,6 +683,10 @@
             timeElapsedEl.textContent = formatTime(elapsed);
             timeTotalEl.textContent = duration > 0 ? formatTime(duration) : '∞';
 
+            if (data.filename) {
+                trackFilenameEl.textContent = data.filename;
+            }
+
             statusText.textContent = 'Odtwarzanie aktywne';
         } catch (e) {
             statusText.textContent = 'Brak odpowiedzi serwera';
@@ -701,7 +705,6 @@
             if (!items.length) {
                 queueContainer.innerHTML = '<div class="queue-empty">Brak utworów w kolejce. Dodaj coś poniżej.</div>';
                 queueSummary.textContent = 'Kolejka: 0 utworów';
-                trackFilenameEl.textContent = 'Oczekiwanie na pierwszy utwór…';
                 return;
             }
 
@@ -710,7 +713,7 @@
                 row.className = 'queue-item';
                 row.innerHTML = `
                     <div class="queue-left">
-                        <div class="queue-index">${index + 1}</div>
+                        <div class="queue-index">${index + 1}.</div>
                         <div class="queue-dot"></div>
                         <div class="queue-name" title="${filename}">${filename}</div>
                     </div>
@@ -720,7 +723,6 @@
             });
 
             queueSummary.textContent = 'Kolejka: ' + items.length + (items.length === 1 ? ' utwór' : ' utworów');
-            trackFilenameEl.textContent = items[0];
         } catch (e) {
             queueContainer.innerHTML = '<div class="queue-empty">Nie udało się pobrać kolejki.</div>';
         }

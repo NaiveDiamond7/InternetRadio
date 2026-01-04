@@ -177,7 +177,7 @@ void Server::start() {
 
     // Bazowa kolejka: najpierw berdly, potem give_the_anarchist
     enqueueTrack("berdly.wav");
-    enqueueTrack("give_the_anarchist.wav");
+    enqueueTrack("give_the_anarchist_a_cigarette.wav");
     
     // Initialize PortAudio
     Pa_Initialize();
@@ -374,6 +374,7 @@ void Server::handleHttpClient(int client) {
         double duration = 0.0;
         double elapsed = 0.0;
         double position = 0.0;
+        std::string filename;
 
         {
             std::lock_guard<std::mutex> lock(playback_mutex);
@@ -384,13 +385,15 @@ void Server::handleHttpClient(int client) {
                 elapsed = pos / bytesPerSecond;
                 if (duration > 0.0)
                     position = elapsed / duration;
+                filename = current_track_name;
             }
         }
 
         std::string body =
             "{\"position\":" + std::to_string(position) +
             ",\"elapsed\":" + std::to_string(elapsed) +
-            ",\"duration\":" + std::to_string(duration) + "}";
+            ",\"duration\":" + std::to_string(duration) +
+            ",\"filename\":\"" + filename + "\"}";
         sendHttpResponse(client, body, "application/json", 200);
         return;
     }
@@ -670,6 +673,7 @@ void Server::streamingLoop() {
                             std::lock_guard<std::mutex> pb_lock(playback_mutex);
                             current_wav = loadWav(track.filename);
                             current_position.store(0, std::memory_order_release);
+                            current_track_name = track.filename;
                         }
                         std::cout << "[SERVER] Now playing: " << track.filename << "\n";
                         std::cout << "  Sample rate: " << current_wav.sampleRate << " Hz\n";
@@ -686,7 +690,7 @@ void Server::streamingLoop() {
                 } else {
                     // No more tracks in queue – dodaj losowo bazowe utwory,
                     // aby radio grało w kółko, gdy nic nie jest w kolejce.
-                    const char* baseTracks[] = {"berdly.wav", "give_the_anarchist.wav"};
+                    const char* baseTracks[] = {"berdly.wav", "give_the_anarchist_a_cigarette.wav"};
                     const int baseCount = 2;
                     int idx = std::rand() % baseCount;
                     int id = next_track_id++;
