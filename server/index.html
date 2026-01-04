@@ -370,17 +370,35 @@
         }
 
         .queue-item {
+            position: relative;
             display: flex;
             justify-content: space-between;
             align-items: center;
             padding: 7px 2px;
             border-radius: 10px;
-            transition: background 0.12s ease, transform 0.06s ease;
+            transition: background 0.12s ease, transform 0.06s ease, box-shadow 0.08s ease, opacity 0.08s ease;
         }
 
         .queue-item:hover {
             background: rgba(12, 22, 58, 0.9);
             transform: translateY(-0.5px);
+        }
+
+        .queue-item--dragging {
+            opacity: 0.45;
+            background: rgba(25, 40, 90, 0.95);
+            box-shadow: 0 10px 26px rgba(0, 0, 0, 0.7);
+        }
+
+        .queue-item--drop-before::before {
+            content: "";
+            position: absolute;
+            left: 4px;
+            right: 4px;
+            top: -3px;
+            height: 0;
+            border-top: 2px solid rgba(145, 229, 255, 0.9);
+            box-shadow: 0 0 10px rgba(145, 229, 255, 0.9);
         }
 
         .queue-left {
@@ -419,6 +437,36 @@
             background: rgba(5, 12, 40, 0.96);
             color: var(--text-muted);
             border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .queue-section {
+            position: relative;
+        }
+
+        .queue-section + .queue-section {
+            margin-top: 8px;
+            padding-top: 6px;
+            border-top: 1px dashed rgba(255, 255, 255, 0.1);
+        }
+
+        .queue-section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            margin: 4px 2px 2px;
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        .queue-section-title {
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            font-size: 10px;
+        }
+
+        .queue-section-sub {
+            font-size: 10px;
+            opacity: 0.8;
         }
 
         /* Inputs */
@@ -649,6 +697,9 @@
     const toastTitleEl = document.getElementById('toast-title');
     const toastBodyEl = document.getElementById('toast-body');
 
+    let queueItems = [];
+    let dragFromIndex = null;
+
     function formatTime(seconds) {
         if (!isFinite(seconds) || seconds < 0) return '0:00';
         const s = Math.floor(seconds);
@@ -698,33 +749,145 @@
             const res = await fetch('/queue', { cache: 'no-store' });
             if (!res.ok) throw new Error('HTTP ' + res.status);
             const data = await res.json();
-            const items = Array.isArray(data.queue) ? data.queue : [];
+            const raw = Array.isArray(data.queue) ? data.queue : [];
 
-            queueContainer.innerHTML = '';
-
-            if (!items.length) {
-                queueContainer.innerHTML = '<div class="queue-empty">Brak utworów w kolejce. Dodaj coś poniżej.</div>';
-                queueSummary.textContent = 'Kolejka: 0 utworów';
-                return;
-            }
-
-            items.forEach((filename, index) => {
-                const row = document.createElement('div');
-                row.className = 'queue-item';
-                row.innerHTML = `
-                    <div class="queue-left">
-                        <div class="queue-index">${index + 1}.</div>
-                        <div class="queue-dot"></div>
-                        <div class="queue-name" title="${filename}">${filename}</div>
-                    </div>
-                    <div class="queue-pill">W kolejce</div>
-                `;
-                queueContainer.appendChild(row);
+            queueItems = raw.map((item, idx) => {
+                if (item && typeof item === 'object') {
+                    return {
+                        id: item.id,
+                        file: item.file,
+                        index: typeof item.index === 'number' ? item.index : idx
+                    };
+                }
+                // fallback na sam string
+                return {
+                    id: idx,
+                    file: String(item),
+                    index: idx
+                };
             });
 
-            queueSummary.textContent = 'Kolejka: ' + items.length + (items.length === 1 ? ' utwór' : ' utworów');
+            renderQueue();
         } catch (e) {
             queueContainer.innerHTML = '<div class="queue-empty">Nie udało się pobrać kolejki.</div>';
+        }
+    }
+
+    function createQueueRow(item, globalIndex) {
+        const row = document.createElement('div');
+        row.className = 'queue-item';
+        row.draggable = true;
+        row.dataset.index = String(globalIndex);
+
+        row.innerHTML = `
+            <div class="queue-left">
+                <div class="queue-index">${globalIndex + 1}.</div>
+                <div class="queue-dot"></div>
+                <div class="queue-name" title="${item.file}">${item.file}</div>
+            </div>
+            <div class="queue-pill">W kolejce</div>
+        `;
+
+        row.addEventListener('dragstart', (e) => {
+            dragFromIndex = globalIndex;
+            row.classList.add('queue-item--dragging');
+            if (e.dataTransfer) {
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', String(globalIndex));
+            }
+        });
+
+        row.addEventListener('dragend', () => {
+            dragFromIndex = null;
+            document.querySelectorAll('.queue-item--dragging').forEach(el => el.classList.remove('queue-item--dragging'));
+            document.querySelectorAll('.queue-item--drop-before').forEach(el => el.classList.remove('queue-item--drop-before'));
+        });
+
+        row.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+            document.querySelectorAll('.queue-item--drop-before').forEach(el => el.classList.remove('queue-item--drop-before'));
+            row.classList.add('queue-item--drop-before');
+        });
+
+        row.addEventListener('dragleave', () => {
+            row.classList.remove('queue-item--drop-before');
+        });
+
+        row.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            row.classList.remove('queue-item--drop-before');
+
+            let from = dragFromIndex;
+            if (from == null && e.dataTransfer) {
+                const dt = e.dataTransfer.getData('text/plain');
+                from = dt !== '' ? Number(dt) : null;
+            }
+            const to = globalIndex;
+            if (from == null || isNaN(from) || from === to) return;
+            await moveQueueItem(from, to);
+        });
+
+        return row;
+    }
+
+    function renderQueue() {
+        queueContainer.innerHTML = '';
+
+        if (!queueItems.length) {
+            queueContainer.innerHTML = '<div class="queue-empty">Brak utworów w kolejce. Dodaj coś poniżej.</div>';
+            queueSummary.textContent = 'Kolejka: 0 utworów';
+            return;
+        }
+
+        const total = queueItems.length;
+        const firstFive = queueItems.slice(0, 5);
+        const rest = queueItems.slice(5);
+
+        const makeSection = (title, subtitle) => {
+            const section = document.createElement('div');
+            section.className = 'queue-section';
+            const header = document.createElement('div');
+            header.className = 'queue-section-header';
+            header.innerHTML = `
+                <div class="queue-section-title">${title}</div>
+                <div class="queue-section-sub">${subtitle}</div>
+            `;
+            section.appendChild(header);
+            return section;
+        };
+
+        const primarySection = makeSection('Następne', 'Najbliższe 5 utworów');
+        firstFive.forEach((item, idx) => {
+            const globalIndex = idx;
+            primarySection.appendChild(createQueueRow(item, globalIndex));
+        });
+        queueContainer.appendChild(primarySection);
+
+        if (rest.length) {
+            const restSection = makeSection('Dalej w kolejce', 'Pozostałe utwory');
+            rest.forEach((item, idx) => {
+                const globalIndex = 5 + idx;
+                restSection.appendChild(createQueueRow(item, globalIndex));
+            });
+            queueContainer.appendChild(restSection);
+        }
+
+        queueSummary.textContent = 'Kolejka: ' + total + (total === 1 ? ' utwór' : ' utworów');
+    }
+
+    async function moveQueueItem(from, to) {
+        try {
+            const body = 'from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to);
+            const res = await fetch('/queue/move', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8' },
+                body
+            });
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            await fetchQueue();
+        } catch (e) {
+            showToast('Nie udało się zmienić kolejności w kolejce.', { title: 'Błąd', error: true });
         }
     }
 
