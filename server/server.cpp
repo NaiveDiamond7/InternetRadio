@@ -66,13 +66,11 @@ int portaudioCallback(
 
 void Server::start() {
     running = true;
-    setupSocket();
     setupHttpSocket();
     
     // Initialize PortAudio
     Pa_Initialize();
 
-    accept_thread = std::thread(&Server::acceptLoop, this);
     stream_thread = std::thread(&Server::streamingLoop, this);
     http_thread   = std::thread(&Server::httpLoop, this);
 
@@ -88,44 +86,10 @@ void Server::stop() {
     if (http_socket > 0)
         close(http_socket);
 
-    if (server_socket > 0)
-        close(server_socket);
-
-    if (accept_thread.joinable()) accept_thread.join();
     if (stream_thread.joinable()) stream_thread.join();
     if (http_thread.joinable())   http_thread.join();
 
     std::cout << "[SERVER] Stopped\n";
-}
-
-void Server::setupSocket() {
-    server_socket = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_socket < 0) {
-        perror("socket");
-        exit(1);
-    }
-
-    // Allow socket reuse to avoid "Address already in use" on restart
-    int reuse = 1;
-    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
-        perror("setsockopt SO_REUSEADDR");
-        exit(1);
-    }
-
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = inet_addr("0.0.0.0");
-    addr.sin_port = htons(port);
-
-    if (bind(server_socket, (sockaddr*)&addr, sizeof(addr)) < 0) {
-        perror("bind");
-        exit(1);
-    }
-
-    if (listen(server_socket, 10) < 0) {
-        perror("listen");
-        exit(1);
-    }
 }
 
 void Server::setupHttpSocket() {
@@ -155,21 +119,6 @@ void Server::setupHttpSocket() {
     if (listen(http_socket, 5) < 0) {
         perror("http listen");
         exit(1);
-    }
-}
-
-void Server::acceptLoop() {
-    while (running) {
-        sockaddr_in client_addr{};
-        socklen_t len = sizeof(client_addr);
-
-        int client = accept(server_socket, (sockaddr*)&client_addr, &len);
-        if (client < 0) continue;
-
-        std::lock_guard<std::mutex> lock(clients_mutex);
-        clients.push_back(client);
-
-        std::cout << "[SERVER] Client connected (" << clients.size() << ")\n";
     }
 }
 
@@ -523,27 +472,6 @@ WavFile Server::loadWav(const std::string& filename) {
         throw std::runtime_error("No audio data found");
 
     return wav;
-}
-
-//
-// ======================= SEND TO CLIENTS =======================
-//
-void Server::sendToClients(const uint8_t* buffer, size_t size) {
-    std::lock_guard<std::mutex> lock(clients_mutex);
-    
-    for (auto it = clients.begin(); it != clients.end(); ) {
-        int client = *it;
-        ssize_t sent = send(client, buffer, size, 0);
-        
-        if (sent < 0) {
-            // Connection lost, remove client
-            close(client);
-            it = clients.erase(it);
-            std::cout << "[SERVER] Client disconnected (" << clients.size() << ")\n";
-        } else {
-            ++it;
-        }
-    }
 }
 
 //
