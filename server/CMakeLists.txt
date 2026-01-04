@@ -13,12 +13,15 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(PORTAUDIO REQUIRED portaudio-2.0)
 
 # Include directories
-include_directories(${PORTAUDIO_INCLUDE_DIRS})
+include_directories(
+    ${PORTAUDIO_INCLUDE_DIRS}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
 
 # Add executable
 add_executable(server
-    main.cpp
-    server.cpp
+    src/main.cpp
+    src/server.cpp
 )
 
 # Link libraries
