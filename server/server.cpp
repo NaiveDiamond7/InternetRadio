@@ -175,9 +175,9 @@ void Server::start() {
     // Zainicjalizuj generator losowy dla automatycznej kolejki
     std::srand(static_cast<unsigned int>(std::time(nullptr)));
 
-    // Bazowa kolejka: najpierw berdly, potem give_the_anarchist
+    // Bazowa kolejka: najpierw berdly, potem sans
     enqueueTrack("berdly.wav");
-    enqueueTrack("give_the_anarchist_a_cigarette.wav");
+    enqueueTrack("sans.wav");
     
     // Initialize PortAudio
     Pa_Initialize();
@@ -690,7 +690,7 @@ void Server::streamingLoop() {
                 } else {
                     // No more tracks in queue – dodaj losowo bazowe utwory,
                     // aby radio grało w kółko, gdy nic nie jest w kolejce.
-                    const char* baseTracks[] = {"berdly.wav", "give_the_anarchist_a_cigarette.wav"};
+                    const char* baseTracks[] = {"berdly.wav", "sans.wav"};
                     const int baseCount = 2;
                     int idx = std::rand() % baseCount;
                     int id = next_track_id++;
