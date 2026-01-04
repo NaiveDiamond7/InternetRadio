@@ -132,12 +132,20 @@
 
         main {
             display: grid;
-            grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+            grid-template-columns: minmax(0, 420px) minmax(0, 1fr);
             gap: 16px;
+            align-items: start;
+        }
+
+        main > .card:first-of-type {
+            align-self: center;
         }
 
         @media (max-width: 820px) {
-            main { grid-template-columns: minmax(0, 1fr); }
+            main {
+                grid-template-columns: minmax(0, 1fr);
+                align-items: stretch;
+            }
         }
 
         .card {
@@ -313,6 +321,7 @@
             cursor: pointer;
             display: inline-flex;
             align-items: center;
+            justify-content: center;
             gap: 6px;
             background: linear-gradient(135deg, var(--accent), #91e5ff);
             color: #020410;
@@ -730,14 +739,6 @@
                 </div>
 
                 <div class="field-group">
-                    <label for="queue-filename">Dodaj istniejący utwór (plik WAV po stronie serwera):</label>
-                    <div class="field-inline">
-                        <input type="text" id="queue-filename" placeholder="np. music/example.wav">
-                        <button type="button" class="btn-secondary" id="btn-enqueue">Dodaj</button>
-                    </div>
-                </div>
-
-                <div class="field-group">
                     <label for="upload-file">Wyślij utwór z dysku (plik WAV, maks. 75 MB):</label>
                     <input type="file" id="upload-file" accept="audio/wav">
                     <div class="field-inline">
@@ -745,6 +746,14 @@
                             Plik trafi do katalogu <code>uploads/</code>i zostanie dodany do kolejki.
                         </small>
                         <button type="button" class="btn-secondary" id="btn-upload">Wyślij</button>
+                    </div>
+                </div>
+
+                <div class="field-group">
+                    <label for="queue-filename">Dodaj istniejący utwór (plik WAV po stronie serwera):</label>
+                    <div class="field-inline">
+                        <input type="text" id="queue-filename" placeholder="np. music/example.wav">
+                        <button type="button" class="btn-secondary" id="btn-enqueue">Dodaj</button>
                     </div>
                 </div>
 
