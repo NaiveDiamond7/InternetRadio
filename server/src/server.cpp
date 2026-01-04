@@ -359,7 +359,7 @@ void Server::handleHttpClient(int client) {
     };
 
     if (path == "/upload" && method == "POST") {
-        const long MAX_UPLOAD = 50 * 1024 * 1024; // 50MB limit
+        const long MAX_UPLOAD = 75 * 1024 * 1024; // 75MB limit
         if (content_length < 0 || content_length > MAX_UPLOAD) {
             sendHttpResponse(client, "{\"error\":\"invalid content-length\"}", "application/json", 400);
             return;

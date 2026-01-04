@@ -732,7 +732,7 @@
                 </div>
 
                 <div class="field-group">
-                    <label for="upload-file">Wyślij utwór z dysku (plik WAV, maks. 50 MB):</label>
+                    <label for="upload-file">Wyślij utwór z dysku (plik WAV, maks. 75 MB):</label>
                     <input type="file" id="upload-file" accept="audio/wav">
                     <div class="field-inline">
                         <small style="color: var(--text-muted); flex: 1;">
@@ -1058,8 +1058,8 @@
             showToast('Wybierz plik WAV do wysłania.', { title: 'Uwaga' });
             return;
         }
-        if (file.size > 50 * 1024 * 1024) {
-            showToast('Plik jest większy niż 50 MB.', { title: 'Za duży plik', error: true });
+        if (file.size > 75 * 1024 * 1024) {
+            showToast('Plik jest większy niż 75 MB.', { title: 'Za duży plik', error: true });
             return;
         }
 
