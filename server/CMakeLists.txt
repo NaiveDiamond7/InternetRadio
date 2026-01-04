@@ -1,44 +1,49 @@
-cmake_minimum_required(VERSION 3.10)
-project(InternetRadioServer)
+cmake_minimum_required(VERSION 3.16)
+project(InternetRadioServer VERSION 0.1 LANGUAGES CXX)
 
-# Set C++17 standard (wymagane m.in. dla nowocześniejszych narzędzi)
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# Sensible defaults for Debian builds
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release)
+endif()
 
-# Find required packages
+# HTTP port as an integer cache entry (not a BOOL option, avoid ON/OFF)
+set(DEFAULT_HTTP_PORT 8080 CACHE STRING "Port used by the HTTP UI/server")
+
+# If an old cache stored it as BOOL (ON/OFF), reset to numeric default
+if(DEFAULT_HTTP_PORT STREQUAL "ON" OR DEFAULT_HTTP_PORT STREQUAL "OFF")
+    unset(DEFAULT_HTTP_PORT CACHE)
+    set(DEFAULT_HTTP_PORT 8080 CACHE STRING "Port used by the HTTP UI/server")
+endif()
+
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(PORTAUDIO REQUIRED IMPORTED_TARGET portaudio-2.0)
 find_package(Threads REQUIRED)
 
-# Find PortAudio using pkg-config (works on Linux and macOS with Homebrew)
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(PORTAUDIO REQUIRED portaudio-2.0)
-
-# Include directories
-include_directories(
-    ${PORTAUDIO_INCLUDE_DIRS}
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-)
-
-# Add executable
 add_executable(server
     src/main.cpp
     src/server.cpp
 )
 
-# Link libraries
-target_link_libraries(server
-    ${PORTAUDIO_LIBRARIES}
+target_compile_features(server PRIVATE cxx_std_17)
+target_compile_options(server PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_definitions(server PRIVATE DEFAULT_HTTP_PORT=${DEFAULT_HTTP_PORT})
+
+target_include_directories(server PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+)
+
+target_link_libraries(server PRIVATE
+    PkgConfig::PORTAUDIO
     Threads::Threads
 )
 
-# Link directories
-link_directories(${PORTAUDIO_LIBRARY_DIRS})
-
-# Compiler flags
-target_compile_options(server PRIVATE -Wall -Wextra -Wpedantic)
-
-# Opcjonalnie: domyślny port HTTP jako definicja kompilacji (można nadpisać przez -DDEFAULT_HTTP_PORT=...)
-if(NOT DEFINED DEFAULT_HTTP_PORT)
-    set(DEFAULT_HTTP_PORT 8080)
-endif()
-
-target_compile_definitions(server PRIVATE DEFAULT_HTTP_PORT=${DEFAULT_HTTP_PORT})
+# Ensure runtime data (UI + bundled WAVs) is available next to the binary when run from the build tree
+add_custom_command(TARGET server POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            $<TARGET_FILE_DIR:server>/public
+            $<TARGET_FILE_DIR:server>/audio
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${PROJECT_SOURCE_DIR}/public/index.html $<TARGET_FILE_DIR:server>/public/index.html
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${PROJECT_SOURCE_DIR}/audio/berdly.wav $<TARGET_FILE_DIR:server>/audio/berdly.wav
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${PROJECT_SOURCE_DIR}/audio/sans.wav   $<TARGET_FILE_DIR:server>/audio/sans.wav
+)
