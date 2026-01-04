@@ -744,7 +744,7 @@
 
                 <div class="meta-row">
                     <span id="upload-status">Gotowy do wysyłania</span>
-                    <span>Port HTTP: 8080</span>
+                    <span id="http-port-info">Port HTTP: …</span>
                 </div>
 
                 <div class="library-wrap">
@@ -791,6 +791,12 @@
     const toastBodyEl = document.getElementById('toast-body');
     const libraryAudioEl = document.getElementById('library-audio');
     const libraryUploadsEl = document.getElementById('library-uploads');
+    const httpPortInfoEl = document.getElementById('http-port-info');
+
+    if (httpPortInfoEl) {
+        const port = window.location.port || (window.location.protocol === 'https:' ? '443' : '80');
+        httpPortInfoEl.textContent = 'Port HTTP: ' + port;
+    }
 
     let queueItems = [];
     let dragFromIndex = null;

@@ -16,6 +16,10 @@
 #include <ctime>
 #include <dirent.h>
 
+#ifndef DEFAULT_HTTP_PORT
+#define DEFAULT_HTTP_PORT 8080
+#endif
+
 static std::string jsonEscape(const std::string& s) {
     std::string out;
     out.reserve(s.size() + 4);
@@ -207,7 +211,8 @@ void Server::start() {
     stream_thread = std::thread(&Server::streamingLoop, this);
     http_thread   = std::thread(&Server::httpLoop, this);
 
-    std::cout << "[SERVER] Started\n";
+    std::cout << "[SERVER] Started on port " << (port > 0 ? port : DEFAULT_HTTP_PORT) << "\n";
+    std::cout << "[SERVER] UI: http://127.0.0.1:" << (port > 0 ? port : DEFAULT_HTTP_PORT) << "/" << "\n";
 }
 
 void Server::stop() {
@@ -242,7 +247,7 @@ void Server::setupHttpSocket() {
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = inet_addr("0.0.0.0");
-    addr.sin_port = htons(8080);
+    addr.sin_port = htons(port > 0 ? port : DEFAULT_HTTP_PORT);
 
     if (bind(http_socket, (sockaddr*)&addr, sizeof(addr)) < 0) {
         perror("http bind");
@@ -814,7 +819,7 @@ void Server::streamingLoop() {
                 if (!playlist.empty()) {
                     Track track = playlist.front();
                     playlist.pop_front();
-                    
+
                     try {
                         {
                             std::lock_guard<std::mutex> pb_lock(playback_mutex);
@@ -826,7 +831,8 @@ void Server::streamingLoop() {
                         std::cout << "  Sample rate: " << current_wav.sampleRate << " Hz\n";
                         std::cout << "  Channels:    " << current_wav.channels << "\n";
                         std::cout << "  Bit depth:   " << current_wav.bitsPerSample << "\n";
-                        
+                        std::cout << "  UI:          http://127.0.0.1:" << (port > 0 ? port : DEFAULT_HTTP_PORT) << "/" << "\n";
+
                         // Start PortAudio stream for this track
                         startAudioStream();
                     }
@@ -835,16 +841,8 @@ void Server::streamingLoop() {
                         stopAudioStream();
                     }
                 } else {
-                    // No more tracks in queue – dodaj losowo bazowe utwory,
-                    // aby radio grało w kółko, gdy nic nie jest w kolejce.
-                    const char* baseTracks[] = {"audio/berdly.wav", "audio/sans.wav"};
-                    const int baseCount = 2;
-                    int idx = std::rand() % baseCount;
-                    int id = next_track_id++;
-                    playlist.push_back({id, baseTracks[idx]});
-                    std::cout << "[SERVER] Auto-enqueued: " << baseTracks[idx] << " (#" << id << ")\n";
-                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                    continue;
+                    // Brak kolejnych utworów w kolejce – pozostaw odtwarzanie zatrzymane,
+                    // aby uruchomienie następnego było świadomą decyzją użytkownika.
                 }
             }
         }

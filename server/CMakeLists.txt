@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.10)
 project(InternetRadioServer)
 
-# Set C++11 standard
-set(CMAKE_CXX_STANDARD 11)
+# Set C++17 standard (wymagane m.in. dla nowocześniejszych narzędzi)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Find required packages
@@ -34,4 +34,11 @@ target_link_libraries(server
 link_directories(${PORTAUDIO_LIBRARY_DIRS})
 
 # Compiler flags
-target_compile_options(server PRIVATE -Wall)
+target_compile_options(server PRIVATE -Wall -Wextra -Wpedantic)
+
+# Opcjonalnie: domyślny port HTTP jako definicja kompilacji (można nadpisać przez -DDEFAULT_HTTP_PORT=...)
+if(NOT DEFINED DEFAULT_HTTP_PORT)
+    set(DEFAULT_HTTP_PORT 8080)
+endif()
+
+target_compile_definitions(server PRIVATE DEFAULT_HTTP_PORT=${DEFAULT_HTTP_PORT})
