@@ -414,7 +414,7 @@ void Server::handleHttpClient(int client) {
             {
                 std::lock_guard<std::mutex> lock(playlist_mutex);
                 for (size_t i = 0; i < playlist.size(); ++i) {
-                    body += "\"" + playlist[i].filename + "\"";
+                    body += "{\"id\":" + std::to_string(playlist[i].id) + ",\"index\":" + std::to_string(i) + ",\"file\":\"" + playlist[i].filename + "\"}";
                     if (i + 1 < playlist.size()) body += ",";
                 }
             }
@@ -437,6 +437,86 @@ void Server::handleHttpClient(int client) {
             sendHttpResponse(client, "{\"enqueued\":" + std::to_string(id) + ",\"file\":\"" + fname + "\"}", "application/json", 200);
             return;
         }
+    }
+
+    if (path == "/queue/move" && method == "POST") {
+        // Parse "from=0&to=2" from body
+        int from = -1, to = -1;
+        {
+            std::istringstream iss(trim(body));
+            std::string token;
+            while (std::getline(iss, token, '&')) {
+                size_t eq = token.find('=');
+                if (eq != std::string::npos) {
+                    std::string key = token.substr(0, eq);
+                    std::string val = token.substr(eq + 1);
+                    if (key == "from") from = std::stoi(val);
+                    if (key == "to") to = std::stoi(val);
+                }
+            }
+        }
+
+        if (from < 0 || to < 0) {
+            sendHttpResponse(client, "{\"error\":\"missing from/to parameters\"}", "application/json", 400);
+            return;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(playlist_mutex);
+            if (static_cast<size_t>(from) >= playlist.size() || static_cast<size_t>(to) >= playlist.size()) {
+                sendHttpResponse(client, "{\"error\":\"index out of range\"}", "application/json", 400);
+                return;
+            }
+
+            auto it = playlist.begin();
+            std::advance(it, from);
+            Track track = *it;
+            playlist.erase(it);
+
+            it = playlist.begin();
+            std::advance(it, to);
+            playlist.insert(it, track);
+        }
+
+        sendHttpResponse(client, "{\"status\":\"moved\",\"from\":" + std::to_string(from) + ",\"to\":" + std::to_string(to) + "}", "application/json", 200);
+        return;
+    }
+
+    if (path == "/queue/remove" && method == "POST") {
+        // Parse "index=2" from body
+        int index = -1;
+        {
+            std::istringstream iss(trim(body));
+            std::string token;
+            while (std::getline(iss, token, '&')) {
+                size_t eq = token.find('=');
+                if (eq != std::string::npos) {
+                    std::string key = token.substr(0, eq);
+                    std::string val = token.substr(eq + 1);
+                    if (key == "index") index = std::stoi(val);
+                }
+            }
+        }
+
+        if (index < 0) {
+            sendHttpResponse(client, "{\"error\":\"missing index parameter\"}", "application/json", 400);
+            return;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(playlist_mutex);
+            if (static_cast<size_t>(index) >= playlist.size()) {
+                sendHttpResponse(client, "{\"error\":\"index out of range\"}", "application/json", 400);
+                return;
+            }
+
+            auto it = playlist.begin();
+            std::advance(it, index);
+            playlist.erase(it);
+        }
+
+        sendHttpResponse(client, "{\"status\":\"removed\",\"index\":" + std::to_string(index) + "}", "application/json", 200);
+        return;
     }
 
     if (path == "/audio") {
