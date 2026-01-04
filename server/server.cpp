@@ -9,6 +9,9 @@
 #include <algorithm>
 #include <iterator>
 #include <chrono>
+#include <sstream>
+#include <cctype>
+#include <sys/stat.h>
 
 Server::Server(int port) : port(port) {}
 
@@ -61,6 +64,106 @@ int portaudioCallback(
     return (pos >= server->current_wav.data.size())
            ? paComplete
            : paContinue;
+}
+
+// Ensure directory exists (mkdir -p like for single level)
+static bool ensureDir(const std::string& path) {
+    struct stat st{};
+    if (stat(path.c_str(), &st) == 0) {
+        return S_ISDIR(st.st_mode);
+    }
+    return mkdir(path.c_str(), 0755) == 0;
+}
+
+static std::string sanitizeFilename(const std::string& name) {
+    std::string out;
+    for (char c : name) {
+        if (c == '/' || c == '\\') continue;
+        if (std::isalnum(static_cast<unsigned char>(c)) || c == '.' || c == '_' || c == '-')
+            out.push_back(c);
+    }
+    if (out.empty()) out = "upload.wav";
+    return out;
+}
+
+static long parseContentLength(const std::string& headers) {
+    std::istringstream iss(headers);
+    std::string line;
+    while (std::getline(iss, line)) {
+        if (line.size() && (line.back() == '\r')) line.pop_back();
+        std::string key = "Content-Length:";
+        if (line.size() >= key.size() && std::equal(key.begin(), key.end(), line.begin(), [](char a,char b){return std::tolower(a)==std::tolower(b);} )) {
+            try {
+                return std::stol(line.substr(key.size()));
+            } catch (...) { return -1; }
+        }
+    }
+    return -1;
+}
+
+static std::string parseBoundary(const std::string& headers) {
+    std::istringstream iss(headers);
+    std::string line;
+    while (std::getline(iss, line)) {
+        if (line.size() && (line.back() == '\r')) line.pop_back();
+        std::string key = "Content-Type:";
+        if (line.size() >= key.size() && std::equal(key.begin(), key.end(), line.begin(), [](char a,char b){return std::tolower(a)==std::tolower(b);} )) {
+            auto pos = line.find("boundary=");
+            if (pos != std::string::npos) {
+                std::string b = line.substr(pos + 9);
+                if (!b.empty() && b.front() == '"' && b.back() == '"') {
+                    b = b.substr(1, b.size() - 2);
+                }
+                return b;
+            }
+        }
+    }
+    return {};
+}
+
+// Very simple multipart parser for single file field named "file"
+static bool parseMultipartSingleFile(
+    const std::string& body,
+    const std::string& boundary,
+    std::string& outFilename,
+    std::string& outData
+) {
+    std::string marker = "--" + boundary;
+    size_t pos = body.find(marker);
+    if (pos == std::string::npos) return false;
+    pos += marker.size();
+    if (pos + 2 > body.size() || body.compare(pos, 2, "\r\n") != 0) return false;
+    pos += 2; // skip CRLF
+
+    // find header end of the part
+    size_t header_end = body.find("\r\n\r\n", pos);
+    if (header_end == std::string::npos) return false;
+    std::string part_headers = body.substr(pos, header_end - pos);
+
+    // filename from Content-Disposition
+    {
+        auto dispoPos = part_headers.find("Content-Disposition:");
+        if (dispoPos == std::string::npos) return false;
+        auto fnamePos = part_headers.find("filename=", dispoPos);
+        if (fnamePos == std::string::npos) return false;
+        fnamePos += 9;
+        if (fnamePos < part_headers.size() && part_headers[fnamePos] == '"') {
+            ++fnamePos;
+            auto endq = part_headers.find('"', fnamePos);
+            if (endq == std::string::npos) return false;
+            outFilename = part_headers.substr(fnamePos, endq - fnamePos);
+        } else {
+            auto endsp = part_headers.find_first_of(";\r\n", fnamePos);
+            outFilename = part_headers.substr(fnamePos, endsp - fnamePos);
+        }
+    }
+
+    size_t data_start = header_end + 4;
+    size_t data_end = body.find("\r\n" + marker, data_start);
+    if (data_end == std::string::npos) return false;
+
+    outData.assign(body.data() + data_start, body.data() + data_end);
+    return true;
 }
 
 
@@ -164,6 +267,9 @@ void Server::handleHttpClient(int client) {
     std::string headers = header_end != std::string::npos ? request.substr(0, header_end) : request;
     std::string body = header_end != std::string::npos ? request.substr(header_end + 4) : std::string();
 
+    long content_length = parseContentLength(headers);
+    std::string boundary = parseBoundary(headers);
+
     // Parse first line: METHOD PATH HTTP/1.1
     size_t method_end = headers.find(' ');
     if (method_end == std::string::npos) {
@@ -185,6 +291,59 @@ void Server::handleHttpClient(int client) {
         while (i < s.size() && (s[i] == ' ' || s[i] == '\t')) ++i;
         return s.substr(i);
     };
+
+    if (path == "/upload" && method == "POST") {
+        const long MAX_UPLOAD = 50 * 1024 * 1024; // 50MB limit
+        if (content_length < 0 || content_length > MAX_UPLOAD) {
+            sendHttpResponse(client, "{\"error\":\"invalid content-length\"}", "application/json", 400);
+            return;
+        }
+        if (boundary.empty()) {
+            sendHttpResponse(client, "{\"error\":\"missing boundary\"}", "application/json", 400);
+            return;
+        }
+
+        // Read remaining body if not fully received
+        while (static_cast<long>(body.size()) < content_length) {
+            char chunk[4096];
+            ssize_t r = recv(client, chunk, sizeof(chunk), 0);
+            if (r <= 0) break;
+            body.append(chunk, static_cast<size_t>(r));
+        }
+
+        if (static_cast<long>(body.size()) < content_length) {
+            sendHttpResponse(client, "{\"error\":\"incomplete upload\"}", "application/json", 400);
+            return;
+        }
+
+        std::string filename;
+        std::string filedata;
+        if (!parseMultipartSingleFile(body, boundary, filename, filedata)) {
+            sendHttpResponse(client, "{\"error\":\"bad multipart\"}", "application/json", 400);
+            return;
+        }
+
+        filename = sanitizeFilename(filename);
+        if (!ensureDir("uploads")) {
+            sendHttpResponse(client, "{\"error\":\"cannot create uploads dir\"}", "application/json", 500);
+            return;
+        }
+
+        std::string outPath = "uploads/" + filename;
+        std::ofstream ofs(outPath, std::ios::binary);
+        if (!ofs) {
+            sendHttpResponse(client, "{\"error\":\"cannot open file\"}", "application/json", 500);
+            return;
+        }
+        ofs.write(filedata.data(), static_cast<std::streamsize>(filedata.size()));
+        ofs.close();
+
+        int id = enqueueTrack(outPath);
+        playback_cv.notify_all();
+
+        sendHttpResponse(client, "{\"saved\":\"" + outPath + "\",\"bytes\":" + std::to_string(filedata.size()) + ",\"enqueued\":" + std::to_string(id) + "}", "application/json", 200);
+        return;
+    }
 
     if (path == "/" || path == "/index.html") {
         std::ifstream f("index.html", std::ios::binary);
