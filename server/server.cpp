@@ -30,12 +30,13 @@ int portaudioCallback(
     Server* server = static_cast<Server*>(userData);
     float* out = static_cast<float*>(output);
 
-    std::lock_guard<std::mutex> lock(server->playback_mutex);
+    // Lock-free: use atomic operations to avoid blocking the real-time audio thread
+    size_t pos = server->current_position.load(std::memory_order_acquire);
 
     for (unsigned long i = 0; i < framesPerBuffer; ++i) {
         for (int ch = 0; ch < server->current_wav.channels; ++ch) {
-            if (server->current_position + 3 <= server->current_wav.data.size()) {
-                const uint8_t* p = server->current_wav.data.data() + server->current_position;
+            if (pos + 3 <= server->current_wav.data.size()) {
+                const uint8_t* p = server->current_wav.data.data() + pos;
                 // Convert 24-bit PCM to float
                 int32_t sample =
                     (p[0]) |
@@ -44,17 +45,20 @@ int portaudioCallback(
                 if (sample & 0x800000)
                     sample |= ~0xFFFFFF;
                 out[i * server->current_wav.channels + ch] = sample / 8388608.0f;
-                server->current_position += 3;
+                pos += 3;
             } else {
                 out[i * server->current_wav.channels + ch] = 0.0f;
             }
         }
     }
 
-    // Notify HTTP/TCP clients that new data is available
+    // Update position atomically without locking
+    server->current_position.store(pos, std::memory_order_release);
+
+    // Notify HTTP/TCP clients that new data is available (non-blocking)
     server->playback_cv.notify_all();
 
-    return (server->current_position >= server->current_wav.data.size())
+    return (pos >= server->current_wav.data.size())
            ? paComplete
            : paContinue;
 }
@@ -101,6 +105,13 @@ void Server::setupSocket() {
         exit(1);
     }
 
+    // Allow socket reuse to avoid "Address already in use" on restart
+    int reuse = 1;
+    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
+        perror("setsockopt SO_REUSEADDR");
+        exit(1);
+    }
+
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = inet_addr("0.0.0.0");
@@ -121,6 +132,13 @@ void Server::setupHttpSocket() {
     http_socket = socket(AF_INET, SOCK_STREAM, 0);
     if (http_socket < 0) {
         perror("http socket");
+        exit(1);
+    }
+
+    // Allow socket reuse to avoid "Address already in use" on restart
+    int reuse = 1;
+    if (setsockopt(http_socket, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
+        perror("setsockopt SO_REUSEADDR");
         exit(1);
     }
 
@@ -240,7 +258,8 @@ void Server::handleHttpClient(int client) {
             if (current_wav.sampleRate > 0 && current_wav.channels > 0 && current_wav.bitsPerSample > 0) {
                 double bytesPerSecond = current_wav.sampleRate * current_wav.channels * (current_wav.bitsPerSample / 8.0);
                 duration = current_wav.data.size() / bytesPerSecond;
-                elapsed = current_position / bytesPerSecond;
+                size_t pos = current_position.load(std::memory_order_acquire);
+                elapsed = pos / bytesPerSecond;
                 if (duration > 0.0)
                     position = elapsed / duration;
             }
@@ -336,7 +355,7 @@ void Server::streamHttpAudio(int client) {
         sampleRate = current_wav.sampleRate;
         channels = current_wav.channels;
         bits = current_wav.bitsPerSample;
-        start_pos = current_position; // start from current live position
+        start_pos = current_position.load(std::memory_order_acquire); // start from current live position
     }
 
     // Very simple WAV header writer (PCM)
@@ -400,11 +419,13 @@ void Server::streamHttpAudio(int client) {
         {
             std::unique_lock<std::mutex> lock(playback_mutex);
             playback_cv.wait_for(lock, std::chrono::milliseconds(200), [&]{
-                return !running || skip_requested || current_position > sent || current_position >= track_size;
+                size_t pos = current_position.load(std::memory_order_acquire);
+                return !running || skip_requested || pos > sent || pos >= track_size;
             });
 
-            available = (current_position > sent) ? (current_position - sent) : 0;
-            track_done = current_position >= track_size;
+            size_t pos = current_position.load(std::memory_order_acquire);
+            available = (pos > sent) ? (pos - sent) : 0;
+            track_done = pos >= track_size;
             do_skip = skip_requested;
         }
 
@@ -534,7 +555,8 @@ void Server::streamingLoop() {
             std::lock_guard<std::mutex> lock(playlist_mutex);
             
             // Check if we need to load a new track
-            if (current_position >= current_wav.data.size() || skip_requested) {
+            size_t pos = current_position.load(std::memory_order_acquire);
+            if (pos >= current_wav.data.size() || skip_requested) {
                 skip_requested = false;
                 stopAudioStream();
                 
@@ -546,7 +568,7 @@ void Server::streamingLoop() {
                         {
                             std::lock_guard<std::mutex> pb_lock(playback_mutex);
                             current_wav = loadWav(track.filename);
-                            current_position = 0;
+                            current_position.store(0, std::memory_order_release);
                         }
                         std::cout << "[SERVER] Now playing: " << track.filename << "\n";
                         std::cout << "  Sample rate: " << current_wav.sampleRate << " Hz\n";

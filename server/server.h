@@ -40,7 +40,7 @@ private:
     // PortAudio stream i stan odtwarzania
     PaStream* audio_stream = nullptr;
     WavFile current_wav;
-    size_t current_position = 0;
+    std::atomic<size_t> current_position{0};
     std::mutex playback_mutex;
     std::condition_variable playback_cv;
 
