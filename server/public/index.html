@@ -122,6 +122,12 @@
             border-radius: 999px;
             background: #67ff8a;
             box-shadow: 0 0 12px rgba(103, 255, 138, 0.9);
+            transition: background 0.15s ease, box-shadow 0.15s ease;
+        }
+
+        .status-dot--error {
+            background: #ff5f5f;
+            box-shadow: 0 0 12px rgba(255, 95, 95, 0.9);
         }
 
         main {
@@ -736,7 +742,7 @@
                     <input type="file" id="upload-file" accept="audio/wav">
                     <div class="field-inline">
                         <small style="color: var(--text-muted); flex: 1;">
-                            Plik trafi do katalogu <code>uploads/</code> na serwerze i zostanie automatycznie dodany do kolejki.
+                            Plik trafi do katalogu <code>uploads/</code>i zostanie dodany do kolejki.
                         </small>
                         <button type="button" class="btn-secondary" id="btn-upload">Wyślij</button>
                     </div>
@@ -786,6 +792,7 @@
     const trackFilenameEl = document.getElementById('track-filename');
     const uploadStatus = document.getElementById('upload-status');
     const statusText = document.getElementById('status-text');
+    const statusDot = document.querySelector('.status-dot');
     const toastEl = document.getElementById('toast');
     const toastTitleEl = document.getElementById('toast-title');
     const toastBodyEl = document.getElementById('toast-body');
@@ -841,8 +848,14 @@
             }
 
             statusText.textContent = 'Odtwarzanie aktywne';
+            if (statusDot) {
+                statusDot.classList.remove('status-dot--error');
+            }
         } catch (e) {
             statusText.textContent = 'Brak odpowiedzi serwera';
+            if (statusDot) {
+                statusDot.classList.add('status-dot--error');
+            }
         }
     }
 

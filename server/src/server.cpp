@@ -110,6 +110,34 @@ static bool ensureDir(const std::string& path) {
     return mkdir(path.c_str(), 0755) == 0;
 }
 
+static void clearUploadsDir() {
+    const char* dirName = "uploads";
+    DIR* dp = opendir(dirName);
+    if (!dp) {
+        return; // brak katalogu uploads – nic do czyszczenia
+    }
+
+    struct dirent* ent;
+    while ((ent = readdir(dp)) != nullptr) {
+        const char* name = ent->d_name;
+        if (std::strcmp(name, ".") == 0 || std::strcmp(name, "..") == 0) {
+            continue;
+        }
+
+        std::string fullPath = std::string(dirName) + "/" + name;
+        struct stat st{};
+        if (stat(fullPath.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
+            if (unlink(fullPath.c_str()) == 0) {
+                std::cout << "[UPLOADS] Removed: " << fullPath << "\n";
+            } else {
+                std::perror(("[UPLOADS] Failed to remove " + fullPath).c_str());
+            }
+        }
+    }
+
+    closedir(dp);
+}
+
 static std::string sanitizeFilename(const std::string& name) {
     std::string out;
     for (char c : name) {
@@ -207,6 +235,9 @@ void Server::start() {
     setupHttpSocket();
     // Zainicjalizuj generator losowy dla automatycznej kolejki
     std::srand(static_cast<unsigned int>(std::time(nullptr)));
+
+    // Wyczyść katalog uploads/ przy starcie serwera
+    clearUploadsDir();
 
     enqueueTrack("audio/berdly.wav");
     enqueueTrack("audio/wodka.wav");
