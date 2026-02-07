@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <dirent.h>
+#include <filesystem>
 
 #ifndef DEFAULT_HTTP_PORT
 #define DEFAULT_HTTP_PORT 8080
@@ -46,7 +47,7 @@ Server::~Server() {
     stop();
 }
 
-int portaudioCallback(
+int portaudioCallback( // zegar odtwarzania
     const void*,
     void* output,
     unsigned long framesPerBuffer,
@@ -328,6 +329,7 @@ void Server::handleHttpClient(int client) {
     long content_length = parseContentLength(headers);
     std::string boundary = parseBoundary(headers);
 
+    // sprawdzamy poprawnosc naglowka
     size_t method_end = headers.find(' ');
     if (method_end == std::string::npos) {
         close(client);
@@ -403,22 +405,25 @@ void Server::handleHttpClient(int client) {
             }
 
             filename = sanitizeFilename(filename);
-            if (!ensureDir("uploads")) {
-                std::cerr << "[UPLOAD] Cannot create uploads directory\n";
+            
+            const char* uploadDir = "uploads";
+            if (!ensureDir(uploadDir)) {
+                std::cerr << "[UPLOAD] Cannot create uploads directory at " << uploadDir << "\n";
                 return;
             }
 
-            std::string outPath = "uploads/" + filename;
+            std::string outPath = std::string(uploadDir) + "/" + filename;
             std::ofstream ofs(outPath, std::ios::binary);
             if (!ofs) {
-                std::cerr << "[UPLOAD] Cannot open file for writing: " << outPath << "\n";
+                std::cerr << "[UPLOAD] Cannot open file for writing: " << outPath 
+                          << " (cwd: " << std::filesystem::current_path().string() << ")\n";
                 return;
             }
             ofs.write(filedata.data(), static_cast<std::streamsize>(filedata.size()));
             ofs.close();
 
             int id = enqueueTrack(outPath);
-            playback_cv.notify_all();
+            // playback_cv.notify_all();
 
             std::cout << "[UPLOAD] Saved " << outPath << " (" << filedata.size() << " bytes), enqueued as #" << id << "\n";
         }).detach();
@@ -524,7 +529,7 @@ void Server::handleHttpClient(int client) {
             }
 
             int id = enqueueTrack(fname);
-            playback_cv.notify_all();
+            // playback_cv.notify_all();
             sendHttpResponse(client, "{\"enqueued\":" + std::to_string(id) + ",\"file\":\"" + fname + "\"}", "application/json", 200);
             return;
         }
@@ -608,6 +613,7 @@ void Server::handleHttpClient(int client) {
         return;
     }
 
+    // get audio
     if (path == "/audio") {
         if (method == "GET") {
             streamHttpAudio(client);
@@ -682,10 +688,14 @@ void Server::streamHttpAudio(int client) {
     auto send_chunk = [&](const uint8_t* ptr, size_t len) -> bool {
         if (len == 0) return true;
         char size_line[32];
+        // rozmiar chunku \r\n
         int m = std::snprintf(size_line, sizeof(size_line), "%zx\r\n", len);
         if (m <= 0) return false;
+        // zapisanie rozmiaru chunku
         if (!send_all(client, reinterpret_cast<const uint8_t*>(size_line), static_cast<size_t>(m))) return false;
+        // zapisanie danych do chunku
         if (!send_all(client, ptr, len)) return false;
+        // koniec chunku \r\n
         return send_all(client, reinterpret_cast<const uint8_t*>("\r\n"), 2);
     };
 
@@ -698,9 +708,10 @@ void Server::streamHttpAudio(int client) {
     if (!send_all(client, reinterpret_cast<const uint8_t*>(http_header.data()), http_header.size())) {
         close(client);
         return;
-    }
+    } // http header
 
     if (!send_chunk(header.data(), header.size())) { close(client); return; }
+    // wav header
 
     size_t sent = start_pos;
     const size_t track_size = data.size();
@@ -715,7 +726,7 @@ void Server::streamHttpAudio(int client) {
             playback_cv.wait_for(lock, std::chrono::milliseconds(200), [&]{
                 size_t pos = current_position.load(std::memory_order_acquire);
                 return !running || skip_requested || pos > sent || pos >= track_size;
-            });
+            }); // budzi sie na playback_cv lub co 200ms
 
             size_t pos = current_position.load(std::memory_order_acquire);
             available = (pos > sent) ? (pos - sent) : 0;
