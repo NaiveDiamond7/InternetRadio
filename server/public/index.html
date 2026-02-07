@@ -176,6 +176,8 @@
             color: var(--text-muted);
         }
 
+        /* Now playing */
+
         .now-playing {
             display: grid;
             grid-template-columns: 96px minmax(0, 1fr);
@@ -367,11 +369,11 @@
 
         audio { width: 100%; }
 
+        /* Queue */
+
         .queue-list {
             margin-top: 4px;
-            height: 140px;
-            min-height: 140px;
-            max-height: 140px;
+            max-height: 230px;
             overflow-y: auto;
         }
 
@@ -493,6 +495,8 @@
             opacity: 0.8;
         }
 
+        /* Inputs */
+
         .field-group {
             margin-top: 10px;
             display: flex;
@@ -547,6 +551,7 @@
             text-align: right;
         }
 
+        /* Library */
 
         .library-wrap {
             margin-top: 10px;
@@ -576,7 +581,7 @@
 
         .library-list {
             margin-top: 4px;
-            max-height: 96px;
+            max-height: 120px;
             overflow-y: auto;
             font-size: 12px;
         }
@@ -609,6 +614,8 @@
         .library-add:hover {
             background: rgba(10, 22, 60, 0.98);
         }
+
+        /* Toast */
 
         .toast {
             position: fixed;
@@ -1249,6 +1256,22 @@
     fetchLibrary();
     setInterval(updateProgress, 700);
     setInterval(fetchQueue, 4000);
+
+
+function reloadAndAutoplay() {
+        window.location.reload();
+    }
+
+    window.onload = function() {
+        var audio = document.getElementById('player') || document.querySelector('audio');
+        if (audio) {
+            audio.autoplay = true;
+            audio.play().catch(()=>{});
+            audio.onended = function() {
+                reloadAndAutoplay();
+            };
+        }
+    };
 </script>
 
 </body>
