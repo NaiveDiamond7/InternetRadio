@@ -41,18 +41,18 @@ private:
     std::mutex playback_mutex;
     std::condition_variable playback_cv;
 
-    std::thread accept_thread;
+    // std::thread accept_thread; dead code
     std::thread stream_thread;
     std::thread http_thread;
 
-    void acceptLoop();
+    // void acceptLoop(); dead code
     void streamingLoop();
     void httpLoop();
 
-    void setupSocket();
+    // void setupSocket(); dead code
     void setupHttpSocket();
     WavFile loadWav(const std::string& filename);
-    void sendToClients(const uint8_t* buffer, size_t size);
+    // void sendToClients(const uint8_t* buffer, size_t size); dead code
     void handleHttpClient(int client);
     void sendHttpResponse(int client, const std::string& body, const std::string& contentType = "text/plain", int status = 200);
     int enqueueTrack(const std::string& filename);
